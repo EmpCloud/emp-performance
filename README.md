@@ -4,27 +4,47 @@
 
 [![Part of EmpCloud](https://img.shields.io/badge/EmpCloud-Module-blue)]()
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-green.svg)](LICENSE)
+[![Status: Built](https://img.shields.io/badge/Status-Built-green)]()
 
-EMP Performance is the performance management module of the EmpCloud ecosystem. It provides review cycles, goals and OKRs, self/manager/peer assessments, competency frameworks, career paths, 1-on-1 meetings, continuous feedback, PIPs, and performance analytics with bell curve calibration.
+EMP Performance is the performance management module of the EmpCloud ecosystem. It provides review cycles, goals and OKRs, self/manager/peer assessments, competency frameworks, career paths, 1-on-1 meetings, continuous feedback, PIPs, performance analytics with bell curve calibration, 9-box grid, succession planning, goal alignment trees, performance letter generation, skills gap analysis, and automated email reminders.
+
+---
+
+## Project Status
+
+**Built** -- all phases implemented and tested.
+
+| Metric | Count |
+|--------|-------|
+| Database tables | 25+ |
+| Frontend pages | 30+ |
+| Migrations | 4 |
 
 ---
 
 ## Features
 
-| Feature | Description |
-|---------|-------------|
-| Review Cycles | Create quarterly/annual/360-degree review cycles, add participants, launch |
-| Goals & OKRs | Set goals with key results, weight, due dates, progress tracking |
-| Self-Assessment | Employee self-review forms with competency ratings |
-| Manager Assessment | Manager reviews with ratings per competency |
-| Peer Reviews | 360-degree peer feedback with nomination workflow |
-| Ratings & Bell Curve | Org-wide ratings distribution, bell curve analysis, calibration |
-| PIPs | Performance Improvement Plans with objectives, timeline, progress updates |
-| Competency Frameworks | Define competencies per role/level |
-| Career Paths | Define career ladders and progression paths |
-| 1-on-1 Meetings | Schedule, agenda, notes, action items, recurrence |
-| Continuous Feedback | Quick kudos/feedback between review cycles |
-| Performance Analytics | Trends, team comparisons, top/bottom performers |
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Review Cycles | Built | Create quarterly/annual/360-degree review cycles, add participants, launch |
+| Goals & OKRs | Built | Set goals with key results, weight, due dates, progress tracking |
+| Self-Assessment | Built | Employee self-review forms with competency ratings |
+| Manager Assessment | Built | Manager reviews with ratings per competency |
+| Peer Reviews | Built | 360-degree peer feedback with nomination workflow |
+| Ratings & Bell Curve | Built | Org-wide ratings distribution, bell curve analysis, calibration |
+| PIPs | Built | Performance Improvement Plans with objectives, timeline, progress updates |
+| Competency Frameworks | Built | Define competencies per role/level |
+| Career Paths | Built | Define career ladders and progression paths |
+| 1-on-1 Meetings | Built | Schedule, agenda, notes, action items, recurrence |
+| Continuous Feedback | Built | Quick kudos/feedback between review cycles |
+| Performance Analytics | Built | Trends, team comparisons, top/bottom performers |
+| 9-Box Grid | Built | Performance vs Potential matrix with color-coded cells, drag-to-reposition |
+| Succession Planning | Built | Succession plans per role, candidate readiness tracking, development actions |
+| Goal Alignment Tree | Built | Company -> department -> team -> individual goal cascade with progress rollup |
+| Performance Letter Generation | Built | Appraisal, increment, promotion, confirmation, warning letter templates (Handlebars + PDF) |
+| Skills Gap Analysis | Built | Radar chart visualization, gap table, learning recommendations per employee |
+| Automated Email Reminders | Built | BullMQ daily jobs for review deadlines, PIP check-ins, meeting reminders, goal due dates |
+| API Documentation | Built | Swagger UI at /api/docs with OpenAPI 3.0 spec |
 
 ---
 
@@ -40,6 +60,7 @@ EMP Performance is the performance management module of the EmpCloud ecosystem. 
 | Cache / Queue | Redis 7, BullMQ |
 | Auth | OAuth2/OIDC via EMP Cloud (RS256 JWT verification) |
 | Charts | Recharts |
+| PDF Generation | Puppeteer / Handlebars |
 
 ---
 
@@ -64,26 +85,28 @@ emp-performance/
         db/
           connection.ts         # Knex connection to emp_performance
           empcloud.ts           # Read-only connection to empcloud DB
-          migrations/           # 5 migration files
+          migrations/           # 4 migration files
         api/
           middleware/            # auth, RBAC, error handling
           routes/               # Route handlers per domain
         services/               # Business logic per domain
-        jobs/                   # BullMQ workers (review reminders, PIP alerts)
+        jobs/                   # BullMQ workers (review reminders, PIP alerts, meeting reminders, goal deadlines)
         utils/                  # Logger, errors, response helpers
+        swagger/                # OpenAPI spec & Swagger UI setup
     client/                     # @emp-performance/client (port 5177)
       src/
         api/                    # API client & hooks
         components/
           layout/               # DashboardLayout, SelfServiceLayout
           ui/                   # Radix-based UI primitives
+          performance/          # NineBoxGrid, GoalAlignmentTree, SkillsRadar, etc.
         pages/                  # Route-based page components
         lib/                    # Auth store, utilities
 ```
 
 ---
 
-## Database Tables
+## Database Tables (25+)
 
 | Table | Purpose |
 |-------|---------|
@@ -96,6 +119,7 @@ emp-performance/
 | `goals` | Employee/team goals with cascading hierarchy |
 | `key_results` | OKR key results under a goal |
 | `goal_check_ins` | Progress updates on goals/KRs |
+| `goal_alignments` | Parent-child goal alignment links (company -> dept -> team -> individual) |
 | `performance_improvement_plans` | PIP records with status lifecycle |
 | `pip_objectives` | Specific objectives within a PIP |
 | `pip_updates` | Progress check-ins for a PIP |
@@ -107,7 +131,16 @@ emp-performance/
 | `meeting_agenda_items` | Agenda, action items, and notes for 1:1s |
 | `peer_review_nominations` | Peer nominations for 360 reviews |
 | `rating_distributions` | Cached bell curve / distribution snapshots |
+| `nine_box_placements` | Employee 9-box grid positions (performance vs potential) |
+| `succession_plans` | Succession plans per critical role |
+| `succession_candidates` | Candidates in succession plans with readiness level |
+| `skills_assessments` | Employee skill ratings for gap analysis |
+| `letter_templates` | Performance letter templates (appraisal, increment, promotion, etc.) |
+| `generated_letters` | Generated performance letter PDFs |
+| `email_reminder_configs` | Configurable reminder schedules per org |
 | `audit_logs` | Module-specific audit trail |
+
+**4 migrations** across the database schema.
 
 ---
 
@@ -143,6 +176,49 @@ All endpoints under `/api/v1/`. Server runs on port **4300**.
 | GET | `/goals/:id` | Get goal with key results and check-ins |
 | POST | `/goals/:id/key-results` | Add key result |
 | POST | `/goals/:id/check-in` | Log progress check-in |
+
+### Goal Alignment Tree
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/goal-alignment/tree` | Get full alignment tree (company -> dept -> team -> individual) |
+| POST | `/goal-alignment/link` | Link child goal to parent goal |
+| DELETE | `/goal-alignment/link/:id` | Remove alignment link |
+| GET | `/goal-alignment/rollup/:goalId` | Get progress rollup for a goal and its children |
+
+### 9-Box Grid
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/nine-box` | Get 9-box grid data for org/department |
+| PUT | `/nine-box/:employeeId` | Update employee placement (performance vs potential) |
+| GET | `/nine-box/history/:employeeId` | Get placement history over time |
+
+### Succession Planning
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/succession-plans` | List succession plans |
+| POST | `/succession-plans` | Create succession plan for a role |
+| GET | `/succession-plans/:id` | Get plan with candidates and readiness |
+| POST | `/succession-plans/:id/candidates` | Add candidate to plan |
+| PUT | `/succession-plans/:id/candidates/:candidateId` | Update readiness level |
+| DELETE | `/succession-plans/:id/candidates/:candidateId` | Remove candidate |
+
+### Skills Gap Analysis
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/skills-gap/:employeeId` | Get skills gap analysis for an employee |
+| GET | `/skills-gap/team/:teamId` | Get team-level skills gap summary |
+| POST | `/skills-gap/assess` | Submit skill assessment |
+| GET | `/skills-gap/recommendations/:employeeId` | Get learning recommendations |
+
+### Performance Letters
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/letter-templates` | List letter templates (appraisal, increment, promotion, confirmation, warning) |
+| POST | `/letter-templates` | Create letter template |
+| PUT | `/letter-templates/:id` | Update template |
+| POST | `/letters/generate` | Generate performance letter PDF |
+| GET | `/letters/:id/download` | Download generated letter |
+| POST | `/letters/:id/send` | Email letter to employee |
 
 ### Competency Frameworks
 | Method | Path | Description |
@@ -184,10 +260,12 @@ All endpoints under `/api/v1/`. Server runs on port **4300**.
 - **Peer Reviews**: Nominate peers, approve nominations
 - **Self-Service**: My reviews, goals, PIPs, 1:1s, feedback, career track
 - **Analytics**: Overview, ratings distribution, team comparison, trends, goal completion, top performers
+- **Email Reminders**: Configure reminder schedules, view pending reminders
+- **API Docs**: Swagger UI at `/api/docs`
 
 ---
 
-## Frontend Pages
+## Frontend Pages (30+)
 
 ### Admin Pages
 | Route | Page | Description |
@@ -197,6 +275,11 @@ All endpoints under `/api/v1/`. Server runs on port **4300**.
 | `/review-cycles/:id` | Review Cycle Detail | Tabs: Overview, Participants, Ratings, Settings |
 | `/review-cycles/new` | Create Cycle | Multi-step wizard |
 | `/goals` | Goals Overview | Tree view of org goals, filter by team/employee |
+| `/goal-alignment` | Goal Alignment Tree | Company -> dept -> team -> individual cascade with progress rollup |
+| `/nine-box` | 9-Box Grid | Performance vs Potential matrix with color-coded cells, click to drill down |
+| `/succession-plans` | Succession Plans | List of plans with readiness indicators |
+| `/succession-plans/:id` | Succession Plan Detail | Candidates, readiness tracking, development actions |
+| `/skills-gap` | Skills Gap Analysis | Radar chart, gap table, learning recommendations |
 | `/competency-frameworks` | Competency Frameworks | CRUD list and editor |
 | `/pips` | PIP List | Filterable table |
 | `/pips/:id` | PIP Detail | Timeline, objectives, updates |
@@ -204,7 +287,9 @@ All endpoints under `/api/v1/`. Server runs on port **4300**.
 | `/analytics` | Analytics | Bell curve, trends, team comparison |
 | `/feedback` | Feedback Wall | Public kudos feed |
 | `/one-on-ones` | 1:1 Overview | Manager view of all 1:1s |
-| `/settings` | Settings | Rating scales, defaults, notifications |
+| `/letters` | Performance Letters | Generate and manage appraisal/increment/promotion/confirmation/warning letters |
+| `/letter-templates` | Letter Templates | CRUD with Handlebars preview |
+| `/settings` | Settings | Rating scales, defaults, notifications, reminder configuration |
 
 ### Self-Service Pages
 | Route | Page | Description |
@@ -218,6 +303,8 @@ All endpoints under `/api/v1/`. Server runs on port **4300**.
 | `/my/one-on-ones` | My 1:1s | Upcoming/past meetings |
 | `/my/feedback` | My Feedback | Received and given feedback |
 | `/my/career` | My Career Path | Current level, next steps, competency gaps |
+| `/my/skills` | My Skills Gap | Personal radar chart, gap analysis, recommended learning |
+| `/my/letters` | My Letters | View and download performance letters |
 
 ---
 
@@ -261,60 +348,10 @@ pnpm --filter @emp-performance/client dev    # Client on :5177
 pnpm --filter @emp-performance/server migrate
 ```
 
----
-
-## Implementation Plan
-
-### Phase 1: Foundation (Weeks 1-2)
-Scaffolding and core infrastructure.
-- Initialize monorepo, copy/adapt boilerplate from emp-payroll
-- Server: config, logger, dual DB connections, auth/error middleware
-- Client: Vite/React shell, routing, layouts, auth
-- Migration 001 (competency frameworks, review cycles, reviews, ratings)
-- AuthService, EmployeeService, AuditService, health check
-
-### Phase 2: Competency Frameworks + Review Cycles (Weeks 3-4)
-- CompetencyFrameworkService + routes + validators
-- ReviewCycleService (CRUD, launch, close)
-- ReviewService (create/submit reviews, competency ratings)
-- Admin UI: Competency Frameworks pages, Review Cycle list/create/detail
-
-### Phase 3: Goals & OKRs (Weeks 5-6)
-- GoalService (CRUD goals, key results, check-ins, progress aggregation)
-- Goals routes + validators
-- Admin UI: Goals overview with tree view
-- Self-Service: My Goals page, create/edit, check-in flow
-
-### Phase 4: Self/Manager/Peer Reviews (Weeks 7-8)
-- Self-review and manager review form pages
-- Peer review nominations and workflow
-- Review submission with deadline enforcement
-- Email notifications via BullMQ
-- Migration 005 (peer nominations, rating distributions)
-
-### Phase 5: PIPs + Continuous Feedback (Weeks 9-10)
-- Migration 003 (PIPs, feedback tables)
-- PIP service (full lifecycle), Feedback service
-- Admin UI: PIP management, Self-Service: My PIP, feedback give/receive
-- Public kudos wall
-
-### Phase 6: Career Paths + 1-on-1s (Weeks 11-12)
-- Migration 004 (career paths, meetings tables)
-- CareerPathService, OneOnOneService
-- Admin UI: Career path editor, 1:1 overview
-- Self-Service: My Career page, My 1:1s
-
-### Phase 7: Analytics + Bell Curve (Weeks 13-14)
-- AnalyticsService (bell curve, trends, team comparisons)
-- Rating calibration tools
-- Analytics dashboard with Recharts, Redis caching
-- CSV/PDF export
-
-### Phase 8: Polish + Testing (Weeks 15-16)
-- E2E tests (Playwright), unit tests (Vitest)
-- BullMQ jobs for review reminders, PIP alerts, 1:1 reminders
-- Docker Compose, performance optimization
-- API documentation
+Once running, visit:
+- **Client**: http://localhost:5177
+- **API**: http://localhost:4300
+- **API Documentation**: http://localhost:4300/api/docs
 
 ---
 
