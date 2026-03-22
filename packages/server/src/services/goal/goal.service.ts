@@ -349,6 +349,150 @@ export async function getCheckIns(
 // Progress Computation
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Goal Alignment Tree
+// ---------------------------------------------------------------------------
+
+interface GoalTreeNode {
+  id: string;
+  title: string;
+  category: string;
+  status: string;
+  progress: number;
+  employee_id: number;
+  parent_goal_id: string | null;
+  due_date: string | null;
+  children: GoalTreeNode[];
+  rollup_progress: number;
+}
+
+export async function getGoalTree(
+  orgId: number,
+  cycleId?: string,
+): Promise<GoalTreeNode[]> {
+  const db = getDB();
+
+  const filters: Record<string, any> = { organization_id: orgId };
+  if (cycleId) filters.cycle_id = cycleId;
+
+  const result = await db.findMany<Goal>("goals", {
+    filters,
+    sort: { field: "category", order: "asc" },
+    limit: 10000,
+  });
+
+  const goals = result.data;
+  const goalMap = new Map<string, GoalTreeNode>();
+
+  // Create tree nodes
+  for (const g of goals) {
+    goalMap.set(g.id, {
+      id: g.id,
+      title: g.title,
+      category: g.category,
+      status: g.status,
+      progress: g.progress,
+      employee_id: g.employee_id,
+      parent_goal_id: g.parent_goal_id,
+      due_date: g.due_date,
+      children: [],
+      rollup_progress: g.progress,
+    });
+  }
+
+  // Build tree structure
+  const roots: GoalTreeNode[] = [];
+  for (const node of goalMap.values()) {
+    if (node.parent_goal_id && goalMap.has(node.parent_goal_id)) {
+      goalMap.get(node.parent_goal_id)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  // Compute rollup progress bottom-up (parent = weighted avg of children)
+  function computeRollup(node: GoalTreeNode): number {
+    if (node.children.length === 0) {
+      node.rollup_progress = node.progress;
+      return node.progress;
+    }
+
+    let totalWeight = 0;
+    let weightedProgress = 0;
+    for (const child of node.children) {
+      const childProgress = computeRollup(child);
+      weightedProgress += childProgress;
+      totalWeight += 1;
+    }
+
+    node.rollup_progress =
+      totalWeight > 0 ? Math.round(weightedProgress / totalWeight) : node.progress;
+    return node.rollup_progress;
+  }
+
+  for (const root of roots) {
+    computeRollup(root);
+  }
+
+  // Sort roots: company first, then department, team, individual
+  const categoryOrder: Record<string, number> = {
+    company: 0,
+    department: 1,
+    team: 2,
+    individual: 3,
+  };
+
+  roots.sort(
+    (a, b) => (categoryOrder[a.category] ?? 4) - (categoryOrder[b.category] ?? 4),
+  );
+
+  return roots;
+}
+
+export async function getGoalAlignment(
+  orgId: number,
+  goalId: string,
+): Promise<{ goal: Goal; ancestors: Goal[]; descendants: Goal[] }> {
+  const db = getDB();
+
+  const goal = await db.findOne<Goal>("goals", { id: goalId, organization_id: orgId });
+  if (!goal) throw new NotFoundError("Goal", goalId);
+
+  // Walk up the ancestor chain
+  const ancestors: Goal[] = [];
+  let currentParentId = goal.parent_goal_id;
+  while (currentParentId) {
+    const parent = await db.findOne<Goal>("goals", {
+      id: currentParentId,
+      organization_id: orgId,
+    });
+    if (!parent) break;
+    ancestors.unshift(parent); // oldest ancestor first
+    currentParentId = parent.parent_goal_id;
+  }
+
+  // Gather all descendants BFS
+  const descendants: Goal[] = [];
+  const queue: string[] = [goalId];
+  while (queue.length > 0) {
+    const parentId = queue.shift()!;
+    const childResult = await db.findMany<Goal>("goals", {
+      filters: { organization_id: orgId, parent_goal_id: parentId },
+      limit: 1000,
+    });
+    for (const child of childResult.data) {
+      descendants.push(child);
+      queue.push(child.id);
+    }
+  }
+
+  return { goal, ancestors, descendants };
+}
+
+// ---------------------------------------------------------------------------
+// Progress Computation
+// ---------------------------------------------------------------------------
+
 export async function computeGoalProgress(
   orgId: number,
   goalId: string,

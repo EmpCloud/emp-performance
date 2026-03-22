@@ -17,6 +17,9 @@ import {
   Menu,
   X,
   TrendingUp,
+  GitBranch,
+  FileText,
+  Radar,
 } from "lucide-react";
 import { isLoggedIn, getUser, useAuthStore } from "@/lib/auth-store";
 import { cn, getInitials } from "@/lib/utils";
@@ -25,13 +28,16 @@ const NAV_ITEMS = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/review-cycles", label: "Review Cycles", icon: RefreshCw },
   { to: "/goals", label: "Goals", icon: Target },
+  { to: "/goals/alignment", label: "Goal Alignment", icon: GitBranch },
   { to: "/competencies", label: "Competencies", icon: Award },
   { to: "/pips", label: "PIPs", icon: AlertTriangle },
   { to: "/career-paths", label: "Career Paths", icon: Route },
   { to: "/one-on-ones", label: "1-on-1s", icon: Users },
   { to: "/feedback", label: "Feedback", icon: MessageSquare },
+  { to: "/letters", label: "Letters", icon: FileText },
   { to: "/analytics", label: "Analytics", icon: BarChart3 },
   { to: "/analytics/nine-box", label: "9-Box Grid", icon: Grid3X3 },
+  { to: "/analytics/skills-gap", label: "Skills Gap", icon: Radar },
   { to: "/succession", label: "Succession", icon: Shield },
   { to: "/settings", label: "Settings", icon: Settings },
 ];

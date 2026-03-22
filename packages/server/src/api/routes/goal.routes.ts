@@ -19,6 +19,34 @@ const router = Router();
 router.use(authenticate);
 
 // ---------------------------------------------------------------------------
+// GET /tree — hierarchical goal alignment tree
+// ---------------------------------------------------------------------------
+router.get("/tree", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const orgId = req.user!.empcloudOrgId;
+    const cycleId = req.query.cycleId as string | undefined;
+    const tree = await goalService.getGoalTree(orgId, cycleId);
+    return sendSuccess(res, tree);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /:id/alignment — goal with ancestors + descendants
+// ---------------------------------------------------------------------------
+router.get("/:id/alignment", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const orgId = req.user!.empcloudOrgId;
+    const { id } = idParamSchema.parse(req.params);
+    const result = await goalService.getGoalAlignment(orgId, id);
+    return sendSuccess(res, result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET / — list goals (paginated, filterable)
 // ---------------------------------------------------------------------------
 router.get("/", async (req: Request, res: Response, next: NextFunction) => {

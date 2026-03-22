@@ -492,3 +492,265 @@ export async function updateSuccessionCandidate(
 
   return db.update<SuccessionCandidate>("succession_candidates", candidateId, updateData as any);
 }
+
+// ---------------------------------------------------------------------------
+// Skills Gap Analysis
+// ---------------------------------------------------------------------------
+
+export interface CompetencyGap {
+  competency_id: string;
+  name: string;
+  category: string | null;
+  currentRating: number;
+  requiredRating: number;
+  gap: number;
+  status: "exceeds" | "meets" | "gap";
+}
+
+export interface SkillsGapResult {
+  employee_id: number;
+  competencies: CompetencyGap[];
+  overallReadiness: number;
+}
+
+export interface LearningRecommendation {
+  competency: string;
+  gap: number;
+  recommendation: string;
+}
+
+export async function getSkillsGap(
+  orgId: number,
+  employeeId: number,
+): Promise<SkillsGapResult> {
+  const db = getDB();
+
+  // Find the employee's career track to determine required competencies
+  const track = await db.findOne<any>("employee_career_tracks", {
+    employee_id: employeeId,
+  });
+
+  // Get latest review for competency ratings
+  const latestReview = await db.raw<any>(
+    `SELECT r.id
+     FROM reviews r
+     WHERE r.organization_id = ?
+       AND r.employee_id = ?
+       AND r.status = 'submitted'
+       AND r.overall_rating IS NOT NULL
+     ORDER BY r.submitted_at DESC
+     LIMIT 1`,
+    [orgId, employeeId],
+  );
+
+  const reviewRows = Array.isArray(latestReview) ? (latestReview[0] || latestReview) : [];
+  const reviewId = Array.isArray(reviewRows) && reviewRows.length > 0 ? reviewRows[0].id : null;
+
+  // Get competency ratings from latest review
+  const ratingMap = new Map<string, number>();
+  if (reviewId) {
+    const ratings = await db.findMany<any>("review_competency_ratings", {
+      filters: { review_id: reviewId },
+      limit: 100,
+    });
+    for (const r of ratings.data) {
+      ratingMap.set(r.competency_id, r.rating);
+    }
+  }
+
+  // Get required competencies from the career path framework or all org competencies
+  let competencies: any[] = [];
+
+  if (track) {
+    // Get the career path's associated competency framework
+    const careerPath = await db.findOne<any>("career_paths", {
+      id: track.career_path_id,
+      organization_id: orgId,
+    });
+
+    if (careerPath) {
+      // Get competencies from all active frameworks in the org
+      const frameworks = await db.findMany<any>("competency_frameworks", {
+        filters: { organization_id: orgId, is_active: true },
+        limit: 100,
+      });
+
+      for (const fw of frameworks.data) {
+        const comps = await db.findMany<any>("competencies", {
+          filters: { framework_id: fw.id },
+          limit: 100,
+        });
+        competencies.push(...comps.data);
+      }
+    }
+  }
+
+  // If no career track, fall back to all active framework competencies
+  if (competencies.length === 0) {
+    const frameworks = await db.findMany<any>("competency_frameworks", {
+      filters: { organization_id: orgId, is_active: true },
+      limit: 100,
+    });
+    for (const fw of frameworks.data) {
+      const comps = await db.findMany<any>("competencies", {
+        filters: { framework_id: fw.id },
+        limit: 100,
+      });
+      competencies.push(...comps.data);
+    }
+  }
+
+  // Build gap analysis
+  const gaps: CompetencyGap[] = competencies.map((comp) => {
+    const currentRating = ratingMap.get(comp.id) ?? 0;
+    // Required rating defaults to 3 (meets expectations) for each competency weight level
+    const requiredRating = Math.min(5, Math.max(3, Math.round(comp.weight)));
+    const gap = requiredRating - currentRating;
+
+    let status: "exceeds" | "meets" | "gap";
+    if (gap < 0) status = "exceeds";
+    else if (gap === 0) status = "meets";
+    else status = "gap";
+
+    return {
+      competency_id: comp.id,
+      name: comp.name,
+      category: comp.category,
+      currentRating,
+      requiredRating,
+      gap,
+      status,
+    };
+  });
+
+  // Overall readiness: percentage of competencies that meet or exceed
+  const meetsOrExceeds = gaps.filter((g) => g.status !== "gap").length;
+  const overallReadiness = gaps.length > 0 ? Math.round((meetsOrExceeds / gaps.length) * 100) : 100;
+
+  return {
+    employee_id: employeeId,
+    competencies: gaps,
+    overallReadiness,
+  };
+}
+
+export async function getDepartmentSkillsGap(
+  orgId: number,
+  departmentId: string,
+): Promise<{
+  department: string;
+  employees: SkillsGapResult[];
+  aggregatedGaps: CompetencyGap[];
+  averageReadiness: number;
+}> {
+  const db = getDB();
+
+  // Get employees in the department via career paths
+  const careerPaths = await db.findMany<any>("career_paths", {
+    filters: { organization_id: orgId, department: departmentId },
+    limit: 100,
+  });
+
+  const employeeIds = new Set<number>();
+  for (const path of careerPaths.data) {
+    const tracks = await db.findMany<any>("employee_career_tracks", {
+      filters: { career_path_id: path.id },
+      limit: 1000,
+    });
+    for (const track of tracks.data) {
+      employeeIds.add(track.employee_id);
+    }
+  }
+
+  // Get skills gap for each employee
+  const employeeGaps: SkillsGapResult[] = [];
+  for (const empId of employeeIds) {
+    const gap = await getSkillsGap(orgId, empId);
+    employeeGaps.push(gap);
+  }
+
+  // Aggregate competency gaps across the department
+  const competencyTotals = new Map<string, { name: string; category: string | null; totalCurrent: number; totalRequired: number; count: number }>();
+
+  for (const empGap of employeeGaps) {
+    for (const comp of empGap.competencies) {
+      const existing = competencyTotals.get(comp.competency_id);
+      if (existing) {
+        existing.totalCurrent += comp.currentRating;
+        existing.totalRequired += comp.requiredRating;
+        existing.count += 1;
+      } else {
+        competencyTotals.set(comp.competency_id, {
+          name: comp.name,
+          category: comp.category,
+          totalCurrent: comp.currentRating,
+          totalRequired: comp.requiredRating,
+          count: 1,
+        });
+      }
+    }
+  }
+
+  const aggregatedGaps: CompetencyGap[] = [];
+  for (const [id, data] of competencyTotals.entries()) {
+    const avgCurrent = Math.round((data.totalCurrent / data.count) * 10) / 10;
+    const avgRequired = Math.round((data.totalRequired / data.count) * 10) / 10;
+    const gap = Math.round((avgRequired - avgCurrent) * 10) / 10;
+
+    let status: "exceeds" | "meets" | "gap";
+    if (gap < 0) status = "exceeds";
+    else if (gap === 0) status = "meets";
+    else status = "gap";
+
+    aggregatedGaps.push({
+      competency_id: id,
+      name: data.name,
+      category: data.category,
+      currentRating: avgCurrent,
+      requiredRating: avgRequired,
+      gap,
+      status,
+    });
+  }
+
+  const avgReadiness =
+    employeeGaps.length > 0
+      ? Math.round(employeeGaps.reduce((sum, e) => sum + e.overallReadiness, 0) / employeeGaps.length)
+      : 100;
+
+  return {
+    department: departmentId,
+    employees: employeeGaps,
+    aggregatedGaps,
+    averageReadiness: avgReadiness,
+  };
+}
+
+export function getLearningRecommendations(gaps: CompetencyGap[]): LearningRecommendation[] {
+  const recommendations: LearningRecommendation[] = [];
+  const gapCompetencies = gaps.filter((g) => g.status === "gap").sort((a, b) => b.gap - a.gap);
+
+  const recommendationMap: Record<string, string> = {
+    leadership: "Leadership development program recommended. Consider executive coaching and leadership workshops.",
+    technical: "Technical skills training needed. Explore certifications, online courses, and hands-on projects.",
+    communication: "Communication skills improvement suggested. Consider presentation workshops and writing courses.",
+    core: "Core competency development required. Focus on foundational skill-building exercises and mentoring.",
+    functional: "Functional expertise enhancement needed. Seek cross-functional projects and specialized training.",
+    behavioral: "Behavioral competency improvement recommended. Consider 360-degree feedback coaching and self-awareness workshops.",
+  };
+
+  for (const gap of gapCompetencies) {
+    const category = (gap.category ?? "core").toLowerCase();
+    const recommendation =
+      recommendationMap[category] ??
+      `Training recommended for ${gap.name}. Gap of ${gap.gap} points between current and required level.`;
+
+    recommendations.push({
+      competency: gap.name,
+      gap: gap.gap,
+      recommendation,
+    });
+  }
+
+  return recommendations;
+}

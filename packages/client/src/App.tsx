@@ -43,6 +43,10 @@ const GoalCreatePage = lazy(() =>
   import("@/pages/goals/GoalCreatePage").then((m) => ({ default: m.GoalCreatePage })),
 );
 
+const GoalAlignmentPage = lazy(() =>
+  import("@/pages/goals/GoalAlignmentPage").then((m) => ({ default: m.GoalAlignmentPage })),
+);
+
 // Competencies
 const FrameworkListPage = lazy(() =>
   import("@/pages/competencies/FrameworkListPage").then((m) => ({ default: m.FrameworkListPage })),
@@ -90,6 +94,9 @@ const MyOneOnOnesPage = lazy(() =>
 const MyOneOnOneDetailPage = lazy(() =>
   import("@/pages/self-service/MyOneOnOneDetailPage").then((m) => ({ default: m.MyOneOnOneDetailPage })),
 );
+const MySkillsGapPage = lazy(() =>
+  import("@/pages/self-service/MySkillsGapPage").then((m) => ({ default: m.MySkillsGapPage })),
+);
 
 // Career Paths
 const CareerPathListPage = lazy(() =>
@@ -127,6 +134,17 @@ const AnalyticsPage = lazy(() =>
 );
 const NineBoxPage = lazy(() =>
   import("@/pages/analytics/NineBoxPage").then((m) => ({ default: m.NineBoxPage })),
+);
+const SkillsGapPage = lazy(() =>
+  import("@/pages/analytics/SkillsGapPage").then((m) => ({ default: m.SkillsGapPage })),
+);
+
+// Letters
+const LetterTemplatePage = lazy(() =>
+  import("@/pages/letters/LetterTemplatePage").then((m) => ({ default: m.LetterTemplatePage })),
+);
+const GeneratedLettersPage = lazy(() =>
+  import("@/pages/letters/GeneratedLettersPage").then((m) => ({ default: m.GeneratedLettersPage })),
 );
 
 // Succession
@@ -231,6 +249,7 @@ export default function App() {
 
           {/* Goals */}
           <Route path="/goals" element={<GoalListPage />} />
+          <Route path="/goals/alignment" element={<GoalAlignmentPage />} />
           <Route path="/goals/new" element={<GoalCreatePage />} />
           <Route path="/goals/:id" element={<GoalDetailPage />} />
 
@@ -253,6 +272,7 @@ export default function App() {
           <Route path="/my/feedback" element={<MyFeedbackPage />} />
           <Route path="/my/one-on-ones" element={<MyOneOnOnesPage />} />
           <Route path="/my/one-on-ones/:id" element={<MyOneOnOneDetailPage />} />
+          <Route path="/my/skills-gap" element={<MySkillsGapPage />} />
 
           {/* Career Paths */}
           <Route path="/career-paths" element={<CareerPathListPage />} />
@@ -271,6 +291,11 @@ export default function App() {
           {/* Analytics */}
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/analytics/nine-box" element={<NineBoxPage />} />
+          <Route path="/analytics/skills-gap" element={<SkillsGapPage />} />
+
+          {/* Letters */}
+          <Route path="/letters/templates" element={<LetterTemplatePage />} />
+          <Route path="/letters" element={<GeneratedLettersPage />} />
 
           {/* Succession Planning */}
           <Route path="/succession" element={<SuccessionPage />} />

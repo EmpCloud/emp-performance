@@ -146,4 +146,38 @@ router.get(
   },
 );
 
+// GET /analytics/skills-gap/department/:deptId — department aggregate
+// (Must be before /:employeeId to avoid "department" being matched as an ID)
+router.get(
+  "/skills-gap/department/:deptId",
+  authorize("hr_admin", "hr_manager", "org_admin"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const orgId = req.user!.empcloudOrgId;
+      const deptId = req.params.deptId;
+      if (!deptId) throw new ValidationError("deptId is required");
+
+      const result = await analyticsService.getDepartmentSkillsGap(orgId, deptId);
+      sendSuccess(res, result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// GET /analytics/skills-gap/:employeeId — individual skills gap
+router.get("/skills-gap/:employeeId", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const orgId = req.user!.empcloudOrgId;
+    const employeeId = parseInt(req.params.employeeId);
+    if (isNaN(employeeId)) throw new ValidationError("employeeId must be a number");
+
+    const result = await analyticsService.getSkillsGap(orgId, employeeId);
+    const recommendations = analyticsService.getLearningRecommendations(result.competencies);
+    sendSuccess(res, { ...result, recommendations });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export { router as analyticsRoutes };

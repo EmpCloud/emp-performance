@@ -465,6 +465,81 @@ export interface NineBoxData {
   totalEmployees: number;
 }
 
+// ---------------------------------------------------------------------------
+// Performance Letters
+// ---------------------------------------------------------------------------
+
+export type LetterType = "appraisal" | "increment" | "promotion" | "confirmation" | "warning";
+
+export interface PerformanceLetterTemplate {
+  id: string;
+  organization_id: number;
+  type: LetterType;
+  name: string;
+  content_template: string;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GeneratedPerformanceLetter {
+  id: string;
+  organization_id: number;
+  employee_id: number;
+  cycle_id: string | null;
+  template_id: string;
+  type: LetterType;
+  content: string;
+  file_path: string | null;
+  generated_by: number;
+  sent_at: string | null;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Skills Gap Analysis
+// ---------------------------------------------------------------------------
+
+export interface CompetencyGap {
+  competency_id: string;
+  name: string;
+  category: string | null;
+  currentRating: number;
+  requiredRating: number;
+  gap: number;
+  status: "exceeds" | "meets" | "gap";
+}
+
+export interface SkillsGapResult {
+  employee_id: number;
+  competencies: CompetencyGap[];
+  overallReadiness: number;
+  recommendations?: LearningRecommendation[];
+}
+
+export interface LearningRecommendation {
+  competency: string;
+  gap: number;
+  recommendation: string;
+}
+
+// ---------------------------------------------------------------------------
+// Goal Alignment Tree
+// ---------------------------------------------------------------------------
+
+export interface GoalTreeNode {
+  id: string;
+  title: string;
+  category: string;
+  status: string;
+  progress: number;
+  employee_id: number;
+  parent_goal_id: string | null;
+  due_date: string | null;
+  children: GoalTreeNode[];
+  rollup_progress: number;
+}
+
 export interface AuditLog {
   id: string;
   organization_id: number;
