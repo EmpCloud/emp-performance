@@ -1,0 +1,36 @@
+{
+  "name": "emp-performance",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Open-source performance management system — part of the EmpCloud HRMS ecosystem",
+  "license": "GPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EmpCloud/emp-performance.git"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"pnpm run dev:server\" \"pnpm run dev:client\"",
+    "dev:server": "pnpm --filter @emp-performance/server dev",
+    "dev:client": "pnpm --filter @emp-performance/client dev",
+    "build": "pnpm -r run build",
+    "build:server": "pnpm --filter @emp-performance/server build",
+    "build:client": "pnpm --filter @emp-performance/client build",
+    "test": "pnpm -r run test",
+    "test:server": "pnpm --filter @emp-performance/server test",
+    "lint": "pnpm -r run lint",
+    "db:migrate": "pnpm --filter @emp-performance/server db:migrate",
+    "db:seed": "pnpm --filter @emp-performance/server db:seed",
+    "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "concurrently": "^9.1.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}
