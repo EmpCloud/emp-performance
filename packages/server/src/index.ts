@@ -25,6 +25,8 @@ import { oneOnOneRoutes } from "./api/routes/one-on-one.routes";
 import { feedbackRoutes } from "./api/routes/feedback.routes";
 import { analyticsRoutes } from "./api/routes/analytics.routes";
 import { peerReviewRoutes } from "./api/routes/peer-review.routes";
+import { successionRoutes } from "./api/routes/succession.routes";
+import { notificationRoutes } from "./api/routes/notification.routes";
 import { errorHandler } from "./api/middleware/error.middleware";
 import { apiLimiter, authLimiter } from "./api/middleware/rate-limit.middleware";
 
@@ -83,6 +85,8 @@ v1.use("/meetings", oneOnOneRoutes);
 v1.use("/feedback", feedbackRoutes);
 v1.use("/analytics", analyticsRoutes);
 v1.use("/peer-reviews", peerReviewRoutes);
+v1.use("/succession-plans", successionRoutes);
+v1.use("/notifications", notificationRoutes);
 v1.use("/auth", authLimiter, authRoutes);
 
 app.use("/api/v1", v1);
@@ -113,6 +117,10 @@ async function start() {
     await db.migrate();
     logger.info("Performance database migrations applied");
 
+    // Initialize job queues (Redis-backed, graceful if unavailable)
+    const { initJobQueues } = await import("./jobs/queue");
+    await initJobQueues();
+
     // Start server
     app.listen(config.port, config.host, () => {
       logger.info(`emp-performance server running at http://${config.host}:${config.port}`);
@@ -127,6 +135,12 @@ async function start() {
 // Graceful shutdown
 const shutdown = async () => {
   logger.info("Shutting down...");
+  try {
+    const { closeJobQueues } = await import("./jobs/queue");
+    await closeJobQueues();
+  } catch {
+    // Queue may not have been initialized
+  }
   await closeDB();
   await closeEmpCloudDB();
   process.exit(0);

@@ -98,6 +98,36 @@ export enum MetricType {
   BOOLEAN = "boolean",
 }
 
+export enum SuccessionCriticality {
+  LOW = "low",
+  MEDIUM = "medium",
+  HIGH = "high",
+  CRITICAL = "critical",
+}
+
+export enum SuccessionStatus {
+  IDENTIFIED = "identified",
+  DEVELOPING = "developing",
+  READY = "ready",
+}
+
+export enum CandidateReadiness {
+  READY_NOW = "ready_now",
+  ONE_TWO_YEARS = "1_2_years",
+  THREE_FIVE_YEARS = "3_5_years",
+}
+
+export type NineBoxPosition =
+  | "Star"
+  | "High Performer"
+  | "Solid Performer"
+  | "High Potential"
+  | "Core Player"
+  | "Average"
+  | "Inconsistent"
+  | "Improvement Needed"
+  | "Action Required";
+
 // ---------------------------------------------------------------------------
 // API Response envelope
 // ---------------------------------------------------------------------------
@@ -382,6 +412,57 @@ export interface RatingDistribution {
   rating: number;
   count: number;
   percentage: number;
+}
+
+export interface PotentialAssessment {
+  id: string;
+  organization_id: number;
+  cycle_id: string;
+  employee_id: number;
+  assessed_by: number;
+  potential_rating: number;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface SuccessionPlan {
+  id: string;
+  organization_id: number;
+  position_title: string;
+  current_holder_id: number | null;
+  department: string | null;
+  criticality: SuccessionCriticality;
+  status: SuccessionStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SuccessionCandidate {
+  id: string;
+  plan_id: string;
+  employee_id: number;
+  readiness: CandidateReadiness;
+  development_notes: string | null;
+  nine_box_position: NineBoxPosition | null;
+  created_at: string;
+}
+
+export interface NineBoxEmployee {
+  id: number;
+  name: string;
+  department: string | null;
+  rating: number;
+  potential: number;
+}
+
+export interface NineBoxCell {
+  employees: NineBoxEmployee[];
+  count: number;
+}
+
+export interface NineBoxData {
+  boxes: Record<NineBoxPosition, NineBoxCell>;
+  totalEmployees: number;
 }
 
 export interface AuditLog {

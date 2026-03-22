@@ -10,6 +10,8 @@ import {
   Users,
   MessageSquare,
   BarChart3,
+  Grid3X3,
+  Shield,
   Settings,
   LogOut,
   Menu,
@@ -29,6 +31,8 @@ const NAV_ITEMS = [
   { to: "/one-on-ones", label: "1-on-1s", icon: Users },
   { to: "/feedback", label: "Feedback", icon: MessageSquare },
   { to: "/analytics", label: "Analytics", icon: BarChart3 },
+  { to: "/analytics/nine-box", label: "9-Box Grid", icon: Grid3X3 },
+  { to: "/succession", label: "Succession", icon: Shield },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 

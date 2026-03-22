@@ -125,6 +125,17 @@ const GiveFeedbackPage = lazy(() =>
 const AnalyticsPage = lazy(() =>
   import("@/pages/analytics/AnalyticsPage").then((m) => ({ default: m.AnalyticsPage })),
 );
+const NineBoxPage = lazy(() =>
+  import("@/pages/analytics/NineBoxPage").then((m) => ({ default: m.NineBoxPage })),
+);
+
+// Succession
+const SuccessionPage = lazy(() =>
+  import("@/pages/succession/SuccessionPage").then((m) => ({ default: m.SuccessionPage })),
+);
+const SuccessionDetailPage = lazy(() =>
+  import("@/pages/succession/SuccessionDetailPage").then((m) => ({ default: m.SuccessionDetailPage })),
+);
 
 // Settings
 const SettingsPage = lazy(() =>
@@ -259,6 +270,11 @@ export default function App() {
 
           {/* Analytics */}
           <Route path="/analytics" element={<AnalyticsPage />} />
+          <Route path="/analytics/nine-box" element={<NineBoxPage />} />
+
+          {/* Succession Planning */}
+          <Route path="/succession" element={<SuccessionPage />} />
+          <Route path="/succession/:id" element={<SuccessionDetailPage />} />
 
           {/* Settings */}
           <Route path="/settings" element={<SettingsPage />} />

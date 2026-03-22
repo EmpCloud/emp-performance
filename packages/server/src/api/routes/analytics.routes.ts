@@ -88,4 +88,62 @@ router.get("/top-performers", async (req: Request, res: Response, next: NextFunc
   }
 });
 
+// GET /analytics/nine-box?cycleId=xxx
+router.get(
+  "/nine-box",
+  authorize("hr_admin", "hr_manager", "org_admin"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const orgId = req.user!.empcloudOrgId;
+      const cycleId = req.query.cycleId as string;
+      if (!cycleId) throw new ValidationError("cycleId query parameter is required");
+      const result = await analyticsService.getNineBoxData(orgId, cycleId);
+      sendSuccess(res, result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// POST /analytics/potential-assessments
+router.post(
+  "/potential-assessments",
+  authorize("hr_admin", "hr_manager", "org_admin"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const orgId = req.user!.empcloudOrgId;
+      const assessedBy = req.user!.empcloudUserId;
+      const { cycle_id, employee_id, potential_rating, notes } = req.body;
+      if (!cycle_id || !employee_id || potential_rating == null) {
+        throw new ValidationError("cycle_id, employee_id, and potential_rating are required");
+      }
+      const result = await analyticsService.createPotentialAssessment(
+        orgId,
+        { cycle_id, employee_id: Number(employee_id), potential_rating: Number(potential_rating), notes },
+        assessedBy,
+      );
+      sendSuccess(res, result, 201);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// GET /analytics/potential-assessments?cycleId=xxx
+router.get(
+  "/potential-assessments",
+  authorize("hr_admin", "hr_manager", "org_admin"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const orgId = req.user!.empcloudOrgId;
+      const cycleId = req.query.cycleId as string;
+      if (!cycleId) throw new ValidationError("cycleId query parameter is required");
+      const result = await analyticsService.listPotentialAssessments(orgId, cycleId);
+      sendSuccess(res, result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 export { router as analyticsRoutes };
