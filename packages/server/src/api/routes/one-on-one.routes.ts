@@ -87,8 +87,8 @@ router.post("/:id/complete", async (req: Request, res: Response, next: NextFunct
 // Agenda Items
 // ---------------------------------------------------------------------------
 
-// POST /meetings/:meetingId/agenda
-router.post("/:meetingId/agenda", async (req: Request, res: Response, next: NextFunction) => {
+// POST /meetings/:meetingId/agenda (also aliased as /:meetingId/agenda-items)
+const agendaHandler = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const orgId = req.user!.empcloudOrgId;
     const { title, description, order } = req.body;
@@ -103,7 +103,9 @@ router.post("/:meetingId/agenda", async (req: Request, res: Response, next: Next
   } catch (err) {
     next(err);
   }
-});
+};
+router.post("/:meetingId/agenda", agendaHandler);
+router.post("/:meetingId/agenda-items", agendaHandler);
 
 // PUT /meetings/agenda/:itemId
 router.put("/agenda/:itemId", async (req: Request, res: Response, next: NextFunction) => {
