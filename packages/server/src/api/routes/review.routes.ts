@@ -16,6 +16,21 @@ const router = Router();
 // All routes require authentication
 router.use(authenticate);
 
+// POST / — create a review
+router.post("/", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const data = createReviewSchema.parse(req.body);
+    const orgId = req.user!.empcloudOrgId;
+    const review = await reviewService.createReview(orgId, data);
+    return sendSuccess(res, review, 201);
+  } catch (err: any) {
+    if (err.name === "ZodError") {
+      return next(new ValidationError("Invalid review data", err.flatten().fieldErrors));
+    }
+    next(err);
+  }
+});
+
 // GET / — list reviews (filter by cycle, reviewer, reviewee, type, status)
 router.get("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
