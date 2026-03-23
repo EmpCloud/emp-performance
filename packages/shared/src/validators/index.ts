@@ -23,13 +23,19 @@ import {
 // Common / Reusable
 // ---------------------------------------------------------------------------
 
-export const paginationSchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
-  perPage: z.coerce.number().int().min(1).max(100).default(20),
-  sort: z.string().optional(),
-  order: z.enum(["asc", "desc"]).default("desc"),
-  search: z.string().optional(),
-});
+export const paginationSchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    perPage: z.coerce.number().int().min(1).max(100).optional(),
+    per_page: z.coerce.number().int().min(1).max(100).optional(),
+    sort: z.string().optional(),
+    order: z.enum(["asc", "desc"]).default("desc"),
+    search: z.string().optional(),
+  })
+  .transform((val) => ({
+    ...val,
+    perPage: val.perPage ?? val.per_page ?? 20,
+  }));
 
 export const idParamSchema = z.object({
   id: z.string().uuid(),
