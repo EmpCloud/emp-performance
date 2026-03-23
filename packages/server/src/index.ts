@@ -82,8 +82,10 @@ v1.use("/pips", pipRoutes);
 v1.use("/review-cycles", reviewCycleRoutes);
 v1.use("/reviews", reviewRoutes);
 v1.use("/competencies", competencyRoutes);
+v1.use("/competency-frameworks", competencyRoutes); // alias
 v1.use("/career-paths", careerPathRoutes);
 v1.use("/meetings", oneOnOneRoutes);
+v1.use("/one-on-ones", oneOnOneRoutes); // alias
 v1.use("/feedback", feedbackRoutes);
 v1.use("/analytics", analyticsRoutes);
 v1.use("/peer-reviews", peerReviewRoutes);

@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { ZodError } from "zod";
 import { logger } from "../../utils/logger";
 import { AppError } from "../../utils/errors";
 import type { ApiResponse } from "@emp-performance/shared";
@@ -14,6 +15,19 @@ export function errorHandler(err: Error, _req: Request, res: Response, _next: Ne
       },
     };
     return res.status(err.statusCode).json(response);
+  }
+
+  // Handle Zod validation errors as 400
+  if (err instanceof ZodError) {
+    const response: ApiResponse<null> = {
+      success: false,
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "Invalid request data",
+        details: err.flatten().fieldErrors,
+      },
+    };
+    return res.status(400).json(response);
   }
 
   logger.error("Unhandled error:", err);

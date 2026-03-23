@@ -12,6 +12,22 @@ import { ValidationError } from "../../utils/errors";
 const router = Router();
 router.use(authenticate);
 
+// GET /feedback — list all feedback (received + given)
+router.get("/", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const orgId = req.user!.empcloudOrgId;
+    const userId = req.user!.empcloudUserId;
+    const result = await feedbackService.listReceived(orgId, userId, {
+      page: parseInt(req.query.page as string) || 1,
+      limit: parseInt(req.query.limit as string) || 20,
+      type: req.query.type as string | undefined,
+    });
+    sendSuccess(res, result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /feedback — give feedback
 router.post("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
