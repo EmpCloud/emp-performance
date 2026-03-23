@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { getDB } from "../../db/adapters";
 import { NotFoundError, ValidationError } from "../../utils/errors";
+import { logger } from "../../utils/logger";
 import type {
   Review,
   ReviewCompetencyRating,
@@ -185,14 +186,19 @@ export async function submitReview(
     }
   }
 
-  return db.update<Review>("reviews", id, {
-    overall_rating: data.overall_rating,
-    summary: data.summary,
-    strengths: data.strengths ?? null,
-    improvements: data.improvements ?? null,
-    status: "submitted",
-    submitted_at: new Date().toISOString(),
-  } as any);
+  try {
+    return await db.update<Review>("reviews", id, {
+      overall_rating: data.overall_rating,
+      summary: data.summary,
+      strengths: data.strengths ?? null,
+      improvements: data.improvements ?? null,
+      status: "submitted",
+      submitted_at: new Date(),
+    } as any);
+  } catch (err) {
+    logger.error("Failed to submit review", { reviewId: id, error: (err as Error).message, stack: (err as Error).stack });
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------

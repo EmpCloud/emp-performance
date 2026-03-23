@@ -49,3 +49,6 @@ docker/data/
 *.pid
 *.seed
 *.pid.lock
+
+.deployment.env
+*.deployment.env
