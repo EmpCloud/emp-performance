@@ -176,7 +176,7 @@ export async function closeCycle(orgId: number, id: string): Promise<ReviewCycle
     });
 
     if (reviews.data.length > 0) {
-      const totalRating = reviews.data.reduce((sum, r) => sum + (r.overall_rating ?? 0), 0);
+      const totalRating = reviews.data.reduce((sum, r) => sum + (Number(r.overall_rating) || 0), 0);
       const avgRating = Math.round((totalRating / reviews.data.length) * 100) / 100;
       await db.update("review_cycle_participants", participant.id, {
         final_rating: avgRating,
