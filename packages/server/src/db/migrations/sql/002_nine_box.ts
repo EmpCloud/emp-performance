@@ -2,6 +2,7 @@ import { Knex } from "knex";
 
 export async function up(knex: Knex): Promise<void> {
   // 1. Potential Assessments
+  if (!(await knex.schema.hasTable("potential_assessments"))) {
   await knex.schema.createTable("potential_assessments", (t) => {
     t.uuid("id").primary();
     t.bigInteger("organization_id").unsigned().notNullable();
@@ -15,8 +16,10 @@ export async function up(knex: Knex): Promise<void> {
     t.unique(["cycle_id", "employee_id"]);
     t.index(["organization_id", "cycle_id"]);
   });
+  }
 
   // 2. Succession Plans
+  if (!(await knex.schema.hasTable("succession_plans"))) {
   await knex.schema.createTable("succession_plans", (t) => {
     t.uuid("id").primary();
     t.bigInteger("organization_id").unsigned().notNullable();
@@ -30,8 +33,10 @@ export async function up(knex: Knex): Promise<void> {
 
     t.index(["organization_id"]);
   });
+  }
 
   // 3. Succession Candidates
+  if (!(await knex.schema.hasTable("succession_candidates"))) {
   await knex.schema.createTable("succession_candidates", (t) => {
     t.uuid("id").primary();
     t.uuid("plan_id").notNullable().references("id").inTable("succession_plans").onDelete("CASCADE");
@@ -44,6 +49,7 @@ export async function up(knex: Knex): Promise<void> {
     t.index(["plan_id"]);
     t.index(["employee_id"]);
   });
+  }
 }
 
 export async function down(knex: Knex): Promise<void> {

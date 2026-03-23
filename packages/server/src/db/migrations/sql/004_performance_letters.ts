@@ -2,6 +2,7 @@ import { Knex } from "knex";
 
 export async function up(knex: Knex): Promise<void> {
   // 1. Performance Letter Templates
+  if (!(await knex.schema.hasTable("performance_letter_templates"))) {
   await knex.schema.createTable("performance_letter_templates", (t) => {
     t.uuid("id").primary();
     t.bigInteger("organization_id").unsigned().notNullable();
@@ -15,8 +16,10 @@ export async function up(knex: Knex): Promise<void> {
     t.index(["organization_id"]);
     t.index(["organization_id", "type"]);
   });
+  }
 
   // 2. Generated Performance Letters
+  if (!(await knex.schema.hasTable("generated_performance_letters"))) {
   await knex.schema.createTable("generated_performance_letters", (t) => {
     t.uuid("id").primary();
     t.bigInteger("organization_id").unsigned().notNullable();
@@ -34,6 +37,7 @@ export async function up(knex: Knex): Promise<void> {
     t.index(["organization_id", "employee_id"]);
     t.index(["template_id"]);
   });
+  }
 }
 
 export async function down(knex: Knex): Promise<void> {

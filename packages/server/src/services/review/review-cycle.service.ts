@@ -185,7 +185,28 @@ export async function closeCycle(orgId: number, id: string): Promise<ReviewCycle
     }
   }
 
-  return db.update<ReviewCycle>("review_cycles", id, { status: "completed" } as any);
+  const closedCycle = await db.update<ReviewCycle>("review_cycles", id, { status: "completed" } as any);
+
+  // Notify EMP Cloud about the cycle completion (non-blocking)
+  const webhookUrl = process.env.EMPCLOUD_WEBHOOK_URL;
+  if (webhookUrl) {
+    fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        event: "performance.cycle_completed",
+        data: {
+          cycleId: id,
+          cycleName: cycle.name,
+          participantCount: participants.data.length,
+        },
+        source: "emp-performance",
+        timestamp: new Date().toISOString(),
+      }),
+    }).catch(() => {}); // fire-and-forget
+  }
+
+  return closedCycle;
 }
 
 // ---------------------------------------------------------------------------

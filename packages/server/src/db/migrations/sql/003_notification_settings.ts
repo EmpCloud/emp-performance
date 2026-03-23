@@ -1,6 +1,7 @@
 import { Knex } from "knex";
 
 export async function up(knex: Knex): Promise<void> {
+  if (!(await knex.schema.hasTable("notification_settings"))) {
   await knex.schema.createTable("notification_settings", (t) => {
     t.uuid("id").primary();
     t.bigInteger("organization_id").unsigned().notNullable().unique();
@@ -14,6 +15,7 @@ export async function up(knex: Knex): Promise<void> {
 
     t.index(["organization_id"]);
   });
+  }
 }
 
 export async function down(knex: Knex): Promise<void> {

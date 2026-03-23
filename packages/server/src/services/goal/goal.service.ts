@@ -183,7 +183,7 @@ export async function updateGoal(
   if (data.cycle_id !== undefined) updates.cycle_id = data.cycle_id;
 
   if (data.status === "completed") {
-    updates.completed_at = new Date().toISOString();
+    updates.completed_at = new Date().toISOString().slice(0, 19).replace("T", " ");
     updates.progress = 100;
   }
 
