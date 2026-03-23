@@ -124,6 +124,7 @@ export function PIPListPage() {
         )}
 
         {!isLoading && pips.length > 0 && (
+          <div className="overflow-x-auto -mx-4 lg:mx-0">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
@@ -190,6 +191,7 @@ export function PIPListPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 
