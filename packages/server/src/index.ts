@@ -28,6 +28,8 @@ import { peerReviewRoutes } from "./api/routes/peer-review.routes";
 import { successionRoutes } from "./api/routes/succession.routes";
 import { notificationRoutes } from "./api/routes/notification.routes";
 import { letterRoutes } from "./api/routes/letter.routes";
+import { aiSummaryRoutes } from "./api/routes/ai-summary.routes";
+import { managerEffectivenessRoutes } from "./api/routes/manager-effectiveness.routes";
 import { errorHandler } from "./api/middleware/error.middleware";
 import { apiLimiter, authLimiter } from "./api/middleware/rate-limit.middleware";
 import { swaggerUIHandler, openapiHandler } from "./api/docs";
@@ -96,6 +98,8 @@ v1.use("/peer-reviews", peerReviewRoutes);
 v1.use("/succession-plans", successionRoutes);
 v1.use("/notifications", notificationRoutes);
 v1.use("/letters", letterRoutes);
+v1.use("/ai-summary", aiSummaryRoutes);
+v1.use("/manager-effectiveness", managerEffectivenessRoutes);
 v1.use("/auth", authLimiter, authRoutes);
 
 app.use("/api/v1", v1);

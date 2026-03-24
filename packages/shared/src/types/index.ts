@@ -553,3 +553,26 @@ export interface AuditLog {
   user_agent: string | null;
   created_at: string;
 }
+
+// ---------------------------------------------------------------------------
+// Manager Effectiveness
+// ---------------------------------------------------------------------------
+
+export interface ManagerEffectivenessScore {
+  id: string;
+  organization_id: number;
+  manager_user_id: number;
+  period: string;
+  overall_score: number | null;
+  team_performance_score: number | null;
+  review_quality_score: number | null;
+  engagement_score: number | null;
+  team_size: number;
+  avg_team_rating: number | null;
+  reviews_completed_on_time_pct: number | null;
+  one_on_one_frequency: number | null;
+  goal_completion_rate: number | null;
+  feedback_given_count: number;
+  calculated_at: string;
+  created_at: string;
+}

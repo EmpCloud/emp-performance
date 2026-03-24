@@ -240,3 +240,55 @@ export const nominatePeerSchema = z.object({
   employee_id: z.number().int(),
   nominee_id: z.number().int(),
 });
+
+// ---------------------------------------------------------------------------
+// AI Summary
+// ---------------------------------------------------------------------------
+
+export const reviewSummaryParamsSchema = z.object({
+  reviewId: z.string().uuid(),
+});
+
+export const employeeSummaryParamsSchema = z.object({
+  userId: z.coerce.number().int(),
+});
+
+export const employeeSummaryQuerySchema = z.object({
+  cycleId: z.string().uuid(),
+});
+
+export const teamSummaryParamsSchema = z.object({
+  managerId: z.coerce.number().int(),
+});
+
+export const teamSummaryQuerySchema = z.object({
+  cycleId: z.string().uuid(),
+});
+
+// ---------------------------------------------------------------------------
+// Manager Effectiveness
+// ---------------------------------------------------------------------------
+
+export const periodQuerySchema = z.object({
+  period: z.string().regex(/^\d{4}-Q[1-4]$/, "period must be in format YYYY-QN (e.g. 2026-Q1)"),
+});
+
+export const calculateScoreParamsSchema = z.object({
+  managerId: z.coerce.number().int(),
+});
+
+export const calculateScoreBodySchema = z.object({
+  period: z.string().regex(/^\d{4}-Q[1-4]$/, "period must be in format YYYY-QN (e.g. 2026-Q1)"),
+});
+
+export const calculateAllBodySchema = z.object({
+  period: z.string().regex(/^\d{4}-Q[1-4]$/, "period must be in format YYYY-QN (e.g. 2026-Q1)"),
+});
+
+export const managerDetailParamsSchema = z.object({
+  managerId: z.coerce.number().int(),
+});
+
+export const managerDetailQuerySchema = z.object({
+  period: z.string().regex(/^\d{4}-Q[1-4]$/, "period must be in format YYYY-QN (e.g. 2026-Q1)"),
+});
