@@ -308,6 +308,17 @@ All endpoints under `/api/v1/`. Server runs on port **4300**.
 
 ---
 
+## Test Deployment
+
+| Environment | URL |
+|-------------|-----|
+| Frontend | https://test-performance.empcloud.com |
+| API | https://test-performance-api.empcloud.com |
+
+SSO integrated with EMP Cloud.
+
+---
+
 ## Getting Started
 
 ### Prerequisites
