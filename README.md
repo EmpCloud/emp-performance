@@ -3,7 +3,7 @@
 > Monitor performance and guide career development for employee growth
 
 [![Part of EmpCloud](https://img.shields.io/badge/EmpCloud-Module-blue)]()
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-green.svg)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Status: Built](https://img.shields.io/badge/Status-Built-green)]()
 
 EMP Performance is the performance management module of the EmpCloud ecosystem. It provides review cycles, goals and OKRs, self/manager/peer assessments, competency frameworks, career paths, 1-on-1 meetings, continuous feedback, PIPs, performance analytics with bell curve calibration, 9-box grid, succession planning, goal alignment trees, performance letter generation, skills gap analysis, and automated email reminders.
@@ -368,4 +368,4 @@ Once running, visit:
 
 ## License
 
-This project is licensed under the [GPL-3.0 License](LICENSE).
+This project is licensed under the [AGPL-3.0 License](LICENSE).
