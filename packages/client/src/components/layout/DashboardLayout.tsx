@@ -24,9 +24,18 @@ import {
 import { isLoggedIn, getUser, useAuthStore } from "@/lib/auth-store";
 import { cn, getInitials } from "@/lib/utils";
 
-const NAV_ITEMS = [
+type Role = "org_admin" | "hr_admin" | "hr_manager" | "employee";
+
+interface NavItem {
+  to: string;
+  label: string;
+  icon: any;
+  adminOnly?: boolean; // if true, hidden from employee role
+}
+
+const NAV_ITEMS: NavItem[] = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/review-cycles", label: "Review Cycles", icon: RefreshCw },
+  { to: "/review-cycles", label: "Review Cycles", icon: RefreshCw, adminOnly: true },
   { to: "/goals", label: "Goals", icon: Target },
   { to: "/goals/alignment", label: "Goal Alignment", icon: GitBranch },
   { to: "/competencies", label: "Competencies", icon: Award },
@@ -35,12 +44,14 @@ const NAV_ITEMS = [
   { to: "/one-on-ones", label: "1-on-1s", icon: Users },
   { to: "/feedback", label: "Feedback", icon: MessageSquare },
   { to: "/letters", label: "Letters", icon: FileText },
-  { to: "/analytics", label: "Analytics", icon: BarChart3 },
-  { to: "/analytics/nine-box", label: "9-Box Grid", icon: Grid3X3 },
-  { to: "/analytics/skills-gap", label: "Skills Gap", icon: Radar },
-  { to: "/succession", label: "Succession", icon: Shield },
-  { to: "/settings", label: "Settings", icon: Settings },
+  { to: "/analytics", label: "Analytics", icon: BarChart3, adminOnly: true },
+  { to: "/analytics/nine-box", label: "9-Box Grid", icon: Grid3X3, adminOnly: true },
+  { to: "/analytics/skills-gap", label: "Skills Gap", icon: Radar, adminOnly: true },
+  { to: "/succession", label: "Succession", icon: Shield, adminOnly: true },
+  { to: "/settings", label: "Settings", icon: Settings, adminOnly: true },
 ];
+
+const ADMIN_ROLES: Role[] = ["org_admin", "hr_admin", "hr_manager"];
 
 export function DashboardLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -76,7 +87,10 @@ export function DashboardLayout() {
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-          {NAV_ITEMS.map((item) => (
+          {NAV_ITEMS.filter((item) => {
+            if (item.adminOnly && !ADMIN_ROLES.includes((user?.role || "employee") as Role)) return false;
+            return true;
+          }).map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
