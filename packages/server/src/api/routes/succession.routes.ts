@@ -5,7 +5,7 @@
 
 import { Router, Request, Response, NextFunction } from "express";
 import { authenticate, authorize } from "../middleware/auth.middleware";
-import * as analyticsService from "../../services/analytics/analytics.service";
+import * as analyticsService from "../../services/analytics/succession.service";
 import { sendSuccess } from "../../utils/response";
 import { ValidationError } from "../../utils/errors";
 
