@@ -92,6 +92,9 @@ const MyOneOnOneDetailPage = lazy(() =>
 const MySkillsGapPage = lazy(() =>
   import("@/pages/self-service/MySkillsGapPage").then((m) => ({ default: m.MySkillsGapPage })),
 );
+const MySelfServiceReviewsPage = lazy(() =>
+  import("@/pages/self-service/MyReviewsPage").then((m) => ({ default: m.MyReviewsPage })),
+);
 
 // Career Paths
 const CareerPathListPage = lazy(() =>
@@ -189,6 +192,7 @@ export function AppRoutes() {
         <Route path="/pips/:id" element={<PIPDetailPage />} />
 
         {/* Self-Service */}
+        <Route path="/my" element={<MyPerformancePage />} />
         <Route path="/my/performance" element={<MyPerformancePage />} />
         <Route path="/my/goals" element={<MyGoalsPage />} />
         <Route path="/my/goals/:id" element={<MyGoalDetailPage />} />
@@ -197,6 +201,7 @@ export function AppRoutes() {
         <Route path="/my/feedback" element={<MyFeedbackPage />} />
         <Route path="/my/one-on-ones" element={<MyOneOnOnesPage />} />
         <Route path="/my/one-on-ones/:id" element={<MyOneOnOneDetailPage />} />
+        <Route path="/my/reviews" element={<MySelfServiceReviewsPage />} />
         <Route path="/my/skills-gap" element={<MySkillsGapPage />} />
 
         {/* Career Paths */}
