@@ -75,11 +75,13 @@ export function DashboardLayout() {
   const user = getUser();
   const displayName = user ? `${user.firstName} ${user.lastName}` : "User";
   const roleLabel =
-    user?.role === "hr_admin"
-      ? "HR Admin"
-      : user?.role === "hr_manager"
-        ? "HR Manager"
-        : "Employee";
+    user?.role === "org_admin"
+      ? "Org Admin"
+      : user?.role === "hr_admin"
+        ? "HR Admin"
+        : user?.role === "hr_manager"
+          ? "HR Manager"
+          : "Employee";
 
   function SidebarContent() {
     return (
