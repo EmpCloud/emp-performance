@@ -30,9 +30,14 @@ import { notificationRoutes } from "./api/routes/notification.routes";
 import { letterRoutes } from "./api/routes/letter.routes";
 import { aiSummaryRoutes } from "./api/routes/ai-summary.routes";
 import { managerEffectivenessRoutes } from "./api/routes/manager-effectiveness.routes";
+import { authenticate, authorize } from "./api/middleware/auth.middleware";
 import { errorHandler } from "./api/middleware/error.middleware";
 import { apiLimiter, authLimiter } from "./api/middleware/rate-limit.middleware";
 import { swaggerUIHandler, openapiHandler } from "./api/docs";
+import * as analyticsService from "./services/analytics/analytics.service";
+import * as letterService from "./services/letter/performance-letter.service";
+import { sendSuccess } from "./utils/response";
+import { ValidationError } from "./utils/errors";
 
 const app = express();
 
@@ -82,6 +87,7 @@ v1.use(apiLimiter);
 
 // Feature routes
 v1.use("/goals", goalRoutes);
+v1.use("/goal-alignment", goalRoutes); // alias — /goal-alignment/tree -> /goals/tree (#870)
 v1.use("/pips", pipRoutes);
 
 // Feature routes
@@ -100,6 +106,50 @@ v1.use("/notifications", notificationRoutes);
 v1.use("/letters", letterRoutes);
 v1.use("/ai-summary", aiSummaryRoutes);
 v1.use("/manager-effectiveness", managerEffectivenessRoutes);
+
+// ---------------------------------------------------------------------------
+// Alias routes for client compatibility (#870–#874)
+// ---------------------------------------------------------------------------
+
+// #871: GET /nine-box -> /analytics/nine-box
+v1.get("/nine-box", authenticate, authorize("hr_admin", "hr_manager", "org_admin"),
+  async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    try {
+      const orgId = req.user!.empcloudOrgId;
+      const cycleId = req.query.cycleId as string;
+      if (!cycleId) throw new ValidationError("cycleId query parameter is required");
+      const result = await analyticsService.getNineBoxData(orgId, cycleId);
+      sendSuccess(res, result);
+    } catch (err) { next(err); }
+  },
+);
+
+// #872: GET /skills-gap/:employeeId -> /analytics/skills-gap/:employeeId
+v1.get("/skills-gap/:employeeId", authenticate,
+  async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    try {
+      const orgId = req.user!.empcloudOrgId;
+      const employeeId = parseInt(String(req.params.employeeId));
+      if (isNaN(employeeId)) throw new ValidationError("employeeId must be a number");
+      const result = await analyticsService.getSkillsGap(orgId, employeeId);
+      const recommendations = analyticsService.getLearningRecommendations(result.competencies);
+      sendSuccess(res, { ...result, recommendations });
+    } catch (err) { next(err); }
+  },
+);
+
+// #873: GET /letter-templates -> /letters/templates
+v1.get("/letter-templates", authenticate, authorize("hr_admin", "hr_manager", "org_admin"),
+  async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    try {
+      const orgId = req.user!.empcloudOrgId;
+      const type = req.query.type as letterService.LetterType | undefined;
+      const result = await letterService.listTemplates(orgId, type);
+      return sendSuccess(res, result);
+    } catch (err) { next(err); }
+  },
+);
+
 v1.use("/auth", authLimiter, authRoutes);
 
 app.use("/api/v1", v1);

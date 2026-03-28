@@ -174,4 +174,24 @@ router.post(
   },
 );
 
+// ---------------------------------------------------------------------------
+// GET /pending — list pending notifications (queue items waiting/active)
+// ---------------------------------------------------------------------------
+router.get(
+  "/pending",
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const available = isQueueSystemAvailable();
+      const queues = available ? await getQueueStatus() : [];
+      const pending = (queues as any[]).filter((q: any) => q.waiting > 0 || q.active > 0);
+      return sendSuccess(res, {
+        pending,
+        total: pending.reduce((sum: number, q: any) => sum + (q.waiting || 0), 0),
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 export { router as notificationRoutes };
