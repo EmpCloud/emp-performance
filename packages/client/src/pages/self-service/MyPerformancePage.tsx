@@ -14,14 +14,16 @@ import { useAuthStore } from "@/lib/auth-store";
 export function MyPerformancePage() {
   const user = useAuthStore((s) => s.user);
 
-  const { data: overviewData, isLoading } = useQuery({
+  const { data: overviewData, isLoading, error: overviewError } = useQuery({
     queryKey: ["analytics", "overview"],
     queryFn: () => apiGet<any>("/analytics/overview"),
+    retry: 1,
   });
 
   const { data: feedbackData } = useQuery({
     queryKey: ["feedback", "received"],
-    queryFn: () => apiGet<any>("/feedback/received?limit=3"),
+    queryFn: () => apiGet<any>("/feedback/received", { limit: 3 }),
+    retry: 1,
   });
 
   const { data: meetingsData } = useQuery({
@@ -33,6 +35,7 @@ export function MyPerformancePage() {
         status: "scheduled",
       }),
     enabled: !!user,
+    retry: 1,
   });
 
   const overview = overviewData?.data;
@@ -47,6 +50,10 @@ export function MyPerformancePage() {
       {isLoading ? (
         <div className="mt-8 flex justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-brand-600" />
+        </div>
+      ) : overviewError ? (
+        <div className="mt-6 rounded-lg border border-red-200 bg-red-50 p-6 text-center">
+          <p className="text-sm text-red-600">Unable to load performance overview. Please try again later.</p>
         </div>
       ) : (
         <>

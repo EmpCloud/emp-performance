@@ -23,7 +23,7 @@ export function MyReviewsPage() {
   const userId = user?.empcloudUserId;
 
   // Reviews I need to complete (where I am the reviewer)
-  const { data: toCompleteData, isLoading: loadingToComplete } = useQuery({
+  const { data: toCompleteData, isLoading: loadingToComplete, error: toCompleteError } = useQuery({
     queryKey: ["my-reviews-to-complete", userId],
     queryFn: () =>
       apiGet<PaginatedResponse<Review>>("/reviews", {
@@ -31,10 +31,11 @@ export function MyReviewsPage() {
         perPage: 50,
       }),
     enabled: Boolean(userId),
+    retry: 1,
   });
 
   // Reviews about me (where I am the employee/reviewee)
-  const { data: aboutMeData, isLoading: loadingAboutMe } = useQuery({
+  const { data: aboutMeData, isLoading: loadingAboutMe, error: aboutMeError } = useQuery({
     queryKey: ["my-reviews-about-me", userId],
     queryFn: () =>
       apiGet<PaginatedResponse<Review>>("/reviews", {
@@ -42,6 +43,7 @@ export function MyReviewsPage() {
         perPage: 50,
       }),
     enabled: Boolean(userId),
+    retry: 1,
   });
 
   const toComplete = toCompleteData?.data?.data ?? [];
@@ -64,7 +66,11 @@ export function MyReviewsPage() {
       {/* Reviews I need to complete */}
       <div className="space-y-4">
         <h2 className="text-lg font-semibold text-gray-900">Reviews to Complete</h2>
-        {loadingToComplete ? (
+        {toCompleteError ? (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-center">
+            <p className="text-sm text-red-600">Failed to load reviews. Please try again later.</p>
+          </div>
+        ) : loadingToComplete ? (
           <div className="flex justify-center py-8">
             <div className="h-6 w-6 animate-spin rounded-full border-4 border-brand-600 border-t-transparent" />
           </div>
@@ -119,7 +125,11 @@ export function MyReviewsPage() {
       {/* Reviews completed for me */}
       <div className="space-y-4">
         <h2 className="text-lg font-semibold text-gray-900">Reviews About Me</h2>
-        {loadingAboutMe ? (
+        {aboutMeError ? (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-center">
+            <p className="text-sm text-red-600">Failed to load reviews. Please try again later.</p>
+          </div>
+        ) : loadingAboutMe ? (
           <div className="flex justify-center py-8">
             <div className="h-6 w-6 animate-spin rounded-full border-4 border-brand-600 border-t-transparent" />
           </div>

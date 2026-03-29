@@ -12,6 +12,32 @@ import * as letterService from "../../services/letter/performance-letter.service
 
 const router = Router();
 router.use(authenticate);
+
+// ---------------------------------------------------------------------------
+// SELF-SERVICE (employee access — before admin-only middleware)
+// ---------------------------------------------------------------------------
+
+// GET /letters/my — list letters addressed to the current user
+router.get("/my", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const orgId = req.user!.empcloudOrgId;
+    const employeeId = req.user!.empcloudUserId;
+    const pagination = paginationSchema.parse(req.query);
+    const result = await letterService.listLetters(orgId, {
+      employeeId,
+      type: req.query.type as letterService.LetterType | undefined,
+      page: pagination.page,
+      perPage: pagination.perPage,
+    });
+    return sendPaginated(res, result.data, result.total, result.page, result.perPage);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// ADMIN-ONLY routes below this line
+// ---------------------------------------------------------------------------
 router.use(authorize("hr_admin", "hr_manager", "org_admin"));
 
 // ---------------------------------------------------------------------------

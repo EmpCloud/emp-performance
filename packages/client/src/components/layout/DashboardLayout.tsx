@@ -41,6 +41,8 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/my/goals", label: "My Goals", icon: Target },
   { to: "/my/feedback", label: "My Feedback", icon: MessageSquare },
   { to: "/my/one-on-ones", label: "My 1-on-1s", icon: Users },
+  { to: "/my/skills", label: "My Skills", icon: Radar },
+  { to: "/my/letters", label: "My Letters", icon: FileText },
   // Admin
   { to: "/review-cycles", label: "Review Cycles", icon: RefreshCw, adminOnly: true },
   { to: "/goals", label: "All Goals", icon: Target, adminOnly: true },

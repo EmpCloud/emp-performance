@@ -95,6 +95,9 @@ const MySkillsGapPage = lazy(() =>
 const MySelfServiceReviewsPage = lazy(() =>
   import("@/pages/self-service/MyReviewsPage").then((m) => ({ default: m.MyReviewsPage })),
 );
+const MyLettersPage = lazy(() =>
+  import("@/pages/self-service/MyLettersPage").then((m) => ({ default: m.MyLettersPage })),
+);
 
 // Career Paths
 const CareerPathListPage = lazy(() =>
@@ -202,7 +205,9 @@ export function AppRoutes() {
         <Route path="/my/one-on-ones" element={<MyOneOnOnesPage />} />
         <Route path="/my/one-on-ones/:id" element={<MyOneOnOneDetailPage />} />
         <Route path="/my/reviews" element={<MySelfServiceReviewsPage />} />
+        <Route path="/my/skills" element={<MySkillsGapPage />} />
         <Route path="/my/skills-gap" element={<MySkillsGapPage />} />
+        <Route path="/my/letters" element={<MyLettersPage />} />
 
         {/* Career Paths */}
         <Route path="/career-paths" element={<CareerPathListPage />} />
