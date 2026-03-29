@@ -32,7 +32,7 @@ export function LoginPage() {
   return (
     <div className="flex min-h-screen">
       {/* Left brand panel */}
-      <div className="hidden lg:flex lg:w-1/2 items-center justify-center bg-gradient-to-br from-violet-600 to-violet-800 p-12">
+      <div className="hidden lg:flex lg:w-1/2 items-center justify-center bg-gradient-to-br from-brand-600 to-brand-800 p-12">
         <div className="max-w-md text-white">
           <div className="flex items-center gap-3 mb-8">
             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/20">
@@ -41,13 +41,13 @@ export function LoginPage() {
             <span className="text-2xl font-bold">EMP Performance</span>
           </div>
           <h2 className="text-3xl font-bold leading-tight mb-4">Drive employee performance</h2>
-          <p className="text-violet-100 text-lg leading-relaxed">
+          <p className="text-brand-100 text-lg leading-relaxed">
             Run review cycles, set goals, collect 360 feedback, manage PIPs, and build career paths -- all in one place.
           </p>
           <div className="mt-10 grid grid-cols-2 gap-4">
             {["Review cycles", "Goal setting", "360 feedback", "9-Box grid", "PIPs", "Competencies", "Career paths", "Analytics"].map((f) => (
-              <div key={f} className="flex items-center gap-2 text-sm text-violet-100">
-                <div className="h-1.5 w-1.5 rounded-full bg-violet-300" />
+              <div key={f} className="flex items-center gap-2 text-sm text-brand-100">
+                <div className="h-1.5 w-1.5 rounded-full bg-brand-300" />
                 {f}
               </div>
             ))}
@@ -60,7 +60,7 @@ export function LoginPage() {
         <div className="w-full max-w-sm">
           {/* Mobile logo */}
           <div className="mb-8 flex items-center justify-center gap-3 lg:hidden">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-600">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-600">
               <Target className="h-6 w-6 text-white" />
             </div>
             <span className="text-xl font-bold text-gray-900">EMP Performance</span>
@@ -81,7 +81,7 @@ export function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
-                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                  className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
                 />
               </div>
               <div>
@@ -95,7 +95,7 @@ export function LoginPage() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     required
-                    className="block w-full rounded-lg border border-gray-300 px-3 py-2 pr-10 text-sm shadow-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                    className="block w-full rounded-lg border border-gray-300 px-3 py-2 pr-10 text-sm shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
                   />
                   <button
                     type="button"
@@ -109,7 +109,7 @@ export function LoginPage() {
               <button
                 type="submit"
                 disabled={loginMutation.isPending}
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
               >
                 {loginMutation.isPending ? (
                   <>
