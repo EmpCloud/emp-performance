@@ -17,12 +17,79 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Handle 401 — redirect to login (but skip for SSO exchange requests)
+// ---------------------------------------------------------------------------
+// Token refresh logic
+// ---------------------------------------------------------------------------
+let isRefreshing = false;
+let refreshSubscribers: ((token: string) => void)[] = [];
+
+function subscribeTokenRefresh(cb: (token: string) => void) {
+  refreshSubscribers.push(cb);
+}
+
+function onTokenRefreshed(newToken: string) {
+  refreshSubscribers.forEach((cb) => cb(newToken));
+  refreshSubscribers = [];
+}
+
+async function tryRefreshToken(): Promise<string | null> {
+  const refreshToken = localStorage.getItem("refresh_token");
+  if (!refreshToken) return null;
+
+  try {
+    const { data } = await axios.post<ApiResponse<{ accessToken: string; refreshToken: string }>>(
+      `${API_BASE}/auth/refresh-token`,
+      { refreshToken },
+      { headers: { "Content-Type": "application/json" } },
+    );
+    if (data.success && data.data) {
+      const { accessToken, refreshToken: newRefresh } = data.data;
+      localStorage.setItem("access_token", accessToken);
+      localStorage.setItem("refresh_token", newRefresh);
+      return accessToken;
+    }
+  } catch {
+    // Refresh failed — token is truly expired
+  }
+  return null;
+}
+
+// Handle 401 — attempt token refresh, then redirect to login if it fails
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    const requestUrl = error.config?.url || "";
-    if (error.response?.status === 401 && !requestUrl.includes("/auth/sso")) {
+    const originalRequest = error.config;
+    const requestUrl = originalRequest?.url || "";
+
+    // Skip refresh for auth endpoints
+    if (requestUrl.includes("/auth/sso") || requestUrl.includes("/auth/refresh-token") || requestUrl.includes("/auth/login")) {
+      return Promise.reject(error);
+    }
+
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      if (isRefreshing) {
+        // Another request is already refreshing — wait for it
+        return new Promise((resolve) => {
+          subscribeTokenRefresh((newToken: string) => {
+            originalRequest.headers.Authorization = `Bearer ${newToken}`;
+            resolve(api(originalRequest));
+          });
+        });
+      }
+
+      originalRequest._retry = true;
+      isRefreshing = true;
+
+      const newToken = await tryRefreshToken();
+      isRefreshing = false;
+
+      if (newToken) {
+        onTokenRefreshed(newToken);
+        originalRequest.headers.Authorization = `Bearer ${newToken}`;
+        return api(originalRequest);
+      }
+
+      // Refresh failed — clear session and redirect to login
       localStorage.removeItem("access_token");
       localStorage.removeItem("refresh_token");
       localStorage.removeItem("user");

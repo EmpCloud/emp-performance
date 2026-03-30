@@ -159,15 +159,18 @@ export async function ssoLogin(empcloudToken: string): Promise<LoginResult> {
     throw new UnauthorizedError("SSO token missing user id");
   }
 
-  // Best-effort token validation — skip if empcloud DB unavailable
+  // Best-effort token validation — skip if empcloud DB unavailable.
+  // Allow tokens that expired within the last hour since SSO is about
+  // establishing a new session — the user's identity is still valid.
   try {
     if (decoded.jti) {
       const { getEmpCloudDB } = await import("../../db/empcloud");
       const empcloudDb = getEmpCloudDB();
+      const gracePeriod = new Date(Date.now() - 60 * 60 * 1000); // 1 hour ago
       const tokenRow = await empcloudDb("oauth_access_tokens")
         .where({ jti: decoded.jti })
         .whereNull("revoked_at")
-        .where("expires_at", ">", new Date())
+        .where("expires_at", ">", gracePeriod)
         .first();
       if (!tokenRow) {
         throw new UnauthorizedError("Invalid or expired SSO token");
