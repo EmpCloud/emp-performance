@@ -71,7 +71,7 @@ export function DashboardPage() {
                   ) : (
                     <p className="text-2xl font-bold text-gray-900">
                       {value ?? 0}
-                      {card.suffix || ""}
+                      {"suffix" in card ? card.suffix : ""}
                     </p>
                   )}
                 </div>
