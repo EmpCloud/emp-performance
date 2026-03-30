@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { isLoggedIn, getUser, useAuthStore } from "@/lib/auth-store";
 import { cn, getInitials } from "@/lib/utils";
+import { BackToDashboard } from "@/components/BackToDashboard";
 
 type Role = "org_admin" | "hr_admin" | "hr_manager" | "employee";
 
@@ -163,13 +164,15 @@ export function DashboardLayout() {
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Top bar */}
         <header className="flex h-16 items-center justify-between border-b border-gray-200 bg-white px-4 lg:px-8">
-          <button
-            onClick={() => setMobileOpen(true)}
-            className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 lg:hidden"
-          >
-            <Menu className="h-5 w-5" />
-          </button>
-          <div className="flex-1" />
+          <div className="flex items-center gap-3">
+            <BackToDashboard />
+            <button
+              onClick={() => setMobileOpen(true)}
+              className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 lg:hidden"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+          </div>
           <div className="flex items-center gap-3">
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-100 text-brand-700 text-xs font-semibold">
               {getInitials(displayName)}
