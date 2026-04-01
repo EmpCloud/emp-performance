@@ -21,6 +21,7 @@ export function rateLimit(options: RateLimitOptions) {
   const { windowMs, max, keyFn } = options;
 
   return (req: Request, res: Response, next: NextFunction) => {
+    if (process.env.RATE_LIMIT_DISABLED === "true") return next();
     const key = keyFn ? keyFn(req) : (req.ip || "unknown");
     const now = Date.now();
     const record = store.get(key);

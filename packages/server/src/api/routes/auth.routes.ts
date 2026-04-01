@@ -7,6 +7,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import * as authService from "../../services/auth/auth.service";
 import { sendSuccess } from "../../utils/response";
 import { ValidationError } from "../../utils/errors";
+import { authenticate } from "../middleware/auth.middleware";
 
 const router = Router();
 
@@ -64,6 +65,11 @@ router.post("/refresh-token", async (req: Request, res: Response, next: NextFunc
   } catch (err) {
     next(err);
   }
+});
+
+// GET /auth/me — return current user from JWT
+router.get("/me", authenticate, (req: Request, res: Response) => {
+  sendSuccess(res, req.user);
 });
 
 export { router as authRoutes };
