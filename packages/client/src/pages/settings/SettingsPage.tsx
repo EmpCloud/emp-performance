@@ -105,10 +105,50 @@ function TabButton({
 function GeneralSettings() {
   const [ratingScale, setRatingScale] = useState("5");
   const [defaultFramework, setDefaultFramework] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-  function handleSave(e: React.FormEvent) {
+  // Load general settings from the notification settings endpoint (shared table)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiGet<any>("/notifications/settings");
+        if (!cancelled && res.data) {
+          setRatingScale(String(res.data.rating_scale ?? 5));
+          setDefaultFramework(res.data.default_framework ?? "");
+        }
+      } catch {
+        // Use defaults if API fails
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  async function handleSave(e: React.FormEvent) {
     e.preventDefault();
-    toast.success("Settings saved successfully");
+    setSaving(true);
+    try {
+      await apiPut("/notifications/settings", {
+        rating_scale: Number(ratingScale),
+        default_framework: defaultFramework,
+      });
+      toast.success("Settings saved successfully");
+    } catch {
+      toast.error("Failed to save settings");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="h-6 w-6 animate-spin text-brand-600" />
+      </div>
+    );
   }
 
   return (
@@ -165,9 +205,10 @@ function GeneralSettings() {
       <div className="flex justify-end">
         <button
           type="submit"
-          className="flex items-center gap-2 rounded-lg bg-brand-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-brand-700"
+          disabled={saving}
+          className="flex items-center gap-2 rounded-lg bg-brand-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <Save className="h-4 w-4" />
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
           Save Settings
         </button>
       </div>

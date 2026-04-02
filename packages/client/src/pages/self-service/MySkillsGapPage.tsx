@@ -124,7 +124,7 @@ export function MySkillsGapPage() {
         See how your skills compare to your career path requirements.
       </p>
 
-      <div className="mt-6 space-y-6">
+      <div className="mt-6 space-y-6 overflow-hidden">
         {/* Readiness Card */}
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between">
@@ -159,10 +159,10 @@ export function MySkillsGapPage() {
 
         {/* Radar Chart */}
         {radarData.length > 2 && (
-          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm overflow-hidden">
             <h2 className="text-lg font-semibold text-gray-900">Your Skills Radar</h2>
             <p className="mt-1 text-sm text-gray-500">Current ratings vs required levels</p>
-            <div className="mt-4 h-80">
+            <div className="mt-4 h-80 w-full max-w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <RadarChart data={radarData}>
                   <PolarGrid />
@@ -191,12 +191,12 @@ export function MySkillsGapPage() {
         )}
 
         {/* Gap Table */}
-        <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+        <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden max-w-full">
           <div className="p-5 border-b border-gray-100">
             <h2 className="text-lg font-semibold text-gray-900">Competency Details</h2>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm min-w-[600px]">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-4 py-3 text-left font-medium text-gray-500">Competency</th>

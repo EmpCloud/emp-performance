@@ -20,6 +20,8 @@ export interface NotificationSettings {
   meeting_reminders_enabled: boolean;
   goal_reminders_enabled: boolean;
   reminder_days_before_deadline: number;
+  rating_scale: number;
+  default_framework: string;
   created_at: Date;
   updated_at: Date;
 }
@@ -30,6 +32,8 @@ export interface UpdateNotificationSettingsInput {
   meeting_reminders_enabled?: boolean;
   goal_reminders_enabled?: boolean;
   reminder_days_before_deadline?: number;
+  rating_scale?: number;
+  default_framework?: string;
 }
 
 // Default settings for organizations without explicit configuration
@@ -39,6 +43,8 @@ const DEFAULTS: Omit<NotificationSettings, "id" | "organization_id" | "created_a
   meeting_reminders_enabled: true,
   goal_reminders_enabled: true,
   reminder_days_before_deadline: 3,
+  rating_scale: 5,
+  default_framework: "",
 };
 
 // ---------------------------------------------------------------------------
@@ -98,6 +104,8 @@ export async function updateNotificationSettings(
   if (data.meeting_reminders_enabled !== undefined) updates.meeting_reminders_enabled = data.meeting_reminders_enabled;
   if (data.goal_reminders_enabled !== undefined) updates.goal_reminders_enabled = data.goal_reminders_enabled;
   if (data.reminder_days_before_deadline !== undefined) updates.reminder_days_before_deadline = data.reminder_days_before_deadline;
+  if (data.rating_scale !== undefined) updates.rating_scale = data.rating_scale;
+  if (data.default_framework !== undefined) updates.default_framework = data.default_framework;
 
   if (existing) {
     return db.update<NotificationSettings>("notification_settings", existing.id, updates);

@@ -155,22 +155,22 @@ export function NineBoxPage() {
                       key={cell.name}
                       onClick={() => setSelectedBox(isSelected ? null : cell.name)}
                       className={`
-                        relative rounded-xl border-2 p-4 text-left transition-all min-h-[140px]
+                        relative rounded-xl border-2 p-4 text-left transition-all min-h-[140px] overflow-hidden
                         ${cell.bgColor} ${cell.color}
                         ${isSelected ? "ring-2 ring-brand-500 ring-offset-2 shadow-lg" : "shadow-sm"}
                       `}
                     >
-                      <div className="text-sm font-semibold text-gray-800">{cell.name}</div>
+                      <div className="text-sm font-semibold text-gray-800 truncate">{cell.name}</div>
                       <div className="mt-2 flex items-center gap-1.5">
-                        <Users className="h-4 w-4 text-gray-500" />
+                        <Users className="h-4 w-4 text-gray-500 shrink-0" />
                         <span className="text-2xl font-bold text-gray-900">{count}</span>
                       </div>
                       {count > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1">
+                        <div className="mt-2 flex flex-wrap gap-1 overflow-hidden max-h-[52px]">
                           {boxData!.employees.slice(0, 3).map((emp) => (
                             <span
                               key={emp.id}
-                              className="inline-block rounded-full bg-white/70 px-2 py-0.5 text-xs text-gray-600 border border-gray-200"
+                              className="inline-block rounded-full bg-white/70 px-2 py-0.5 text-xs text-gray-600 border border-gray-200 truncate max-w-full"
                             >
                               {emp.name}
                             </span>

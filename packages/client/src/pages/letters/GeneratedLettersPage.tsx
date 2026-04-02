@@ -244,9 +244,9 @@ export function GeneratedLettersPage() {
               </span>
             </div>
             <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-              <pre className="whitespace-pre-wrap text-sm text-gray-800 font-mono">
+              <div className="whitespace-pre-wrap text-sm text-gray-800 leading-relaxed">
                 {viewingLetter.content}
-              </pre>
+              </div>
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <button

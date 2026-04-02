@@ -289,7 +289,7 @@ export async function sendLetter(
   const updated = await db.update<GeneratedPerformanceLetter>(
     "generated_performance_letters",
     letterId,
-    { sent_at: new Date().toISOString() } as any,
+    { sent_at: new Date() } as any,
   );
 
   logger.info(`Performance letter sent: ${letterId}`);

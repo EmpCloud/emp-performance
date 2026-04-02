@@ -78,7 +78,8 @@ function GoalTreeNodeComponent({
   onNavigate: (id: string) => void;
 }) {
   const isExpanded = expandedIds.has(node.id);
-  const hasChildren = node.children.length > 0;
+  const children = node.children ?? [];
+  const hasChildren = children.length > 0;
 
   return (
     <div>
@@ -133,12 +134,12 @@ function GoalTreeNodeComponent({
 
           <div className="mt-1.5 flex items-center gap-3">
             <div className="flex-1 max-w-xs">
-              <ProgressBar value={node.rollup_progress} />
+              <ProgressBar value={node.rollup_progress ?? node.progress ?? 0} />
             </div>
             <span className="text-xs font-medium text-gray-600">
-              {node.rollup_progress}%
+              {node.rollup_progress ?? node.progress ?? 0}%
             </span>
-            {hasChildren && node.rollup_progress !== node.progress && (
+            {hasChildren && (node.rollup_progress ?? node.progress) !== node.progress && (
               <span className="text-xs text-gray-400" title="Own progress vs rollup">
                 (own: {node.progress}%)
               </span>
@@ -159,7 +160,7 @@ function GoalTreeNodeComponent({
       {/* Children */}
       {isExpanded &&
         hasChildren &&
-        node.children.map((child) => (
+        children.map((child) => (
           <div key={child.id} className="mt-1">
             <GoalTreeNodeComponent
               node={child}
@@ -200,9 +201,10 @@ export function GoalAlignmentPage() {
     const allIds = new Set<string>();
     function collect(nodes: GoalTreeNode[]) {
       for (const n of nodes) {
-        if (n.children.length > 0) {
+        const ch = n.children ?? [];
+        if (ch.length > 0) {
           allIds.add(n.id);
-          collect(n.children);
+          collect(ch);
         }
       }
     }
