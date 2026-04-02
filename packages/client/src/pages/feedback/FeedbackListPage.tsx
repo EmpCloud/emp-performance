@@ -10,7 +10,6 @@ import {
 } from "lucide-react";
 import { apiGet, apiPost } from "@/api/client";
 import { formatDate } from "@/lib/utils";
-import { getUser } from "@/lib/auth-store";
 import toast from "react-hot-toast";
 
 interface FeedbackItem {
@@ -20,7 +19,7 @@ interface FeedbackItem {
   type: string;
   visibility: string;
   message: string;
-  tags: string | null;
+  tags: string | string[] | null;
   is_anonymous: boolean;
   created_at: string;
 }
@@ -31,13 +30,21 @@ const TYPE_CONFIG: Record<string, { icon: typeof Heart; color: string; label: st
   suggestion: { icon: Lightbulb, color: "bg-amber-50 text-amber-600", label: "Suggestion" },
 };
 
-export function FeedbackListPage() {
-  return <FeedbackWallPage />;
+const VISIBILITY_LABELS: Record<string, string> = {
+  public: "Public",
+  manager_visible: "Manager Only",
+  private: "Private",
+};
+
+function parseTags(tags: string | string[] | null): string[] {
+  if (!tags) return [];
+  if (Array.isArray(tags)) return tags;
+  try { return JSON.parse(tags); } catch { return []; }
 }
 
-export function FeedbackWallPage() {
+export function FeedbackListPage() {
   const queryClient = useQueryClient();
-  const user = getUser();
+  const [typeFilter, setTypeFilter] = useState<string>("all");
 
   const [toUserId, setToUserId] = useState("");
   const [type, setType] = useState("kudos");
@@ -46,8 +53,12 @@ export function FeedbackWallPage() {
   const [tagsStr, setTagsStr] = useState("");
 
   const { data, isLoading } = useQuery({
-    queryKey: ["feedback", "wall"],
-    queryFn: () => apiGet<{ data: FeedbackItem[]; total: number }>("/feedback/wall"),
+    queryKey: ["feedback", "all", typeFilter],
+    queryFn: () =>
+      apiGet<{ data: FeedbackItem[]; total: number }>(
+        "/feedback",
+        typeFilter !== "all" ? { type: typeFilter } : undefined,
+      ),
   });
 
   const giveMutation = useMutation({
@@ -63,7 +74,7 @@ export function FeedbackWallPage() {
       toast.error(err.response?.data?.error?.message || "Failed to send feedback"),
   });
 
-  const wall = data?.data?.data || [];
+  const feedbackList = data?.data?.data || [];
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -81,12 +92,16 @@ export function FeedbackWallPage() {
 
   return (
     <div>
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Feedback Wall</h1>
-        <p className="mt-1 text-sm text-gray-500">Public kudos and feedback feed.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">All Feedback</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            View and manage all feedback across the organization.
+          </p>
+        </div>
       </div>
 
-      {/* Give Kudos Form */}
+      {/* Give Feedback Form */}
       <form
         onSubmit={handleSubmit}
         className="mt-6 rounded-xl border border-gray-200 bg-white p-5 shadow-sm"
@@ -160,23 +175,45 @@ export function FeedbackWallPage() {
         </div>
       </form>
 
-      {/* Feedback Feed */}
+      {/* Type filter tabs */}
+      <div className="mt-6 flex gap-1 rounded-lg bg-gray-100 p-1 w-fit">
+        {[
+          { key: "all", label: "All" },
+          { key: "kudos", label: "Kudos" },
+          { key: "constructive", label: "Constructive" },
+          { key: "suggestion", label: "Suggestion" },
+        ].map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setTypeFilter(tab.key)}
+            className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${
+              typeFilter === tab.key
+                ? "bg-white text-gray-900 shadow-sm"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Feedback List */}
       {isLoading ? (
         <div className="mt-8 flex justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-brand-600" />
         </div>
-      ) : wall.length === 0 ? (
+      ) : feedbackList.length === 0 ? (
         <div className="mt-8 rounded-xl border border-gray-200 bg-white p-12 text-center">
           <MessageSquare className="mx-auto h-12 w-12 text-gray-300" />
-          <h3 className="mt-4 text-lg font-medium text-gray-900">No public feedback yet</h3>
-          <p className="mt-1 text-sm text-gray-500">Be the first to give kudos!</p>
+          <h3 className="mt-4 text-lg font-medium text-gray-900">No feedback yet</h3>
+          <p className="mt-1 text-sm text-gray-500">Be the first to give feedback!</p>
         </div>
       ) : (
-        <div className="mt-6 space-y-4">
-          {wall.map((item) => {
+        <div className="mt-4 space-y-4">
+          {feedbackList.map((item) => {
             const cfg = TYPE_CONFIG[item.type] || TYPE_CONFIG.kudos;
             const Icon = cfg.icon;
-            const tags: string[] = item.tags ? JSON.parse(item.tags) : [];
+            const tags = parseTags(item.tags);
             return (
               <div
                 key={item.id}
@@ -187,7 +224,7 @@ export function FeedbackWallPage() {
                     <Icon className="h-4 w-4" />
                   </div>
                   <div className="flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-sm font-medium text-gray-900">
                         {item.is_anonymous ? "Anonymous" : `User #${item.from_user_id}`}
                       </span>
@@ -195,8 +232,14 @@ export function FeedbackWallPage() {
                       <span className="text-sm font-medium text-gray-900">
                         User #{item.to_user_id}
                       </span>
-                      <span className={`ml-auto rounded-full px-2 py-0.5 text-xs font-medium ${cfg.color}`}>
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${cfg.color}`}>
                         {cfg.label}
+                      </span>
+                      <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">
+                        {VISIBILITY_LABELS[item.visibility] || item.visibility}
+                      </span>
+                      <span className="ml-auto text-xs text-gray-400">
+                        {formatDate(item.created_at)}
                       </span>
                     </div>
                     <p className="mt-2 text-sm text-gray-700">{item.message}</p>
@@ -212,7 +255,6 @@ export function FeedbackWallPage() {
                         ))}
                       </div>
                     )}
-                    <p className="mt-2 text-xs text-gray-400">{formatDate(item.created_at)}</p>
                   </div>
                 </div>
               </div>

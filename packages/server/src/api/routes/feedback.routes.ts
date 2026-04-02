@@ -12,12 +12,11 @@ import { ValidationError } from "../../utils/errors";
 const router = Router();
 router.use(authenticate);
 
-// GET /feedback — list all feedback (received + given)
+// GET /feedback — list all feedback for the organization (admin view)
 router.get("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const orgId = req.user!.empcloudOrgId;
-    const userId = req.user!.empcloudUserId;
-    const result = await feedbackService.listReceived(orgId, userId, {
+    const result = await feedbackService.listAll(orgId, {
       page: parseInt(req.query.page as string) || 1,
       limit: parseInt(req.query.limit as string) || 20,
       type: req.query.type as string | undefined,

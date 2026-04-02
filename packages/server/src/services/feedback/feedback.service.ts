@@ -104,6 +104,24 @@ export async function listGiven(
   });
 }
 
+export async function listAll(
+  orgId: number,
+  params?: ListFeedbackParams,
+) {
+  const db = getDB();
+  const filters: Record<string, any> = {
+    organization_id: orgId,
+  };
+  if (params?.type) filters.type = params.type;
+
+  return db.findMany<Feedback>("continuous_feedback", {
+    page: params?.page || 1,
+    limit: params?.limit || 20,
+    filters,
+    sort: { field: "created_at", order: "desc" },
+  });
+}
+
 export async function getPublicWall(
   orgId: number,
   params?: { page?: number; limit?: number },

@@ -117,7 +117,9 @@ export function MyFeedbackPage() {
           {feedbackList.map((item) => {
             const Icon = TYPE_ICONS[item.type] || MessageSquare;
             const colorClass = TYPE_COLORS[item.type] || TYPE_COLORS.constructive;
-            const tags: string[] = item.tags ? JSON.parse(item.tags) : [];
+            const tags: string[] = item.tags
+              ? (typeof item.tags === "string" ? JSON.parse(item.tags) : item.tags)
+              : [];
 
             return (
               <div
