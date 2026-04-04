@@ -235,7 +235,7 @@ describe("Test data setup", () => {
 
     const review = await db("reviews").where({ id: reviewId }).first();
     expect(review.status).toBe("submitted");
-    expect(review.overall_rating).toBe(4);
+    expect(Number(review.overall_rating)).toBe(4);
   });
 
   it("should create goals", async () => {
@@ -434,7 +434,7 @@ describe("AI Summary Service — employee summary queries (real DB)", () => {
       })
       .whereNotNull("overall_rating");
 
-    const totalRating = submitted.reduce((s: number, r: any) => s + r.overall_rating, 0);
+    const totalRating = submitted.reduce((s: number, r: any) => s + Number(r.overall_rating), 0);
     const consolidated = submitted.length > 0
       ? Math.round((totalRating / submitted.length) * 100) / 100
       : null;
@@ -679,7 +679,7 @@ describe("CompetencyFrameworkService (real DB)", () => {
 
     const comp = await db("competencies").where({ id: newCompId }).first();
     expect(comp.name).toBe("System Design");
-    expect(comp.weight).toBe(2);
+    expect(Number(comp.weight)).toBe(2);
   });
 
   it("should get framework with competencies", async () => {
@@ -704,7 +704,7 @@ describe("CompetencyFrameworkService (real DB)", () => {
 
     const updated = await db("competencies").where({ id: newCompId }).first();
     expect(updated.name).toBe("System Architecture");
-    expect(updated.weight).toBe(3);
+    expect(Number(updated.weight)).toBe(3);
   });
 
   it("should update framework", async () => {
@@ -1069,15 +1069,15 @@ describe("GoalService (real DB)", () => {
 
     const kr = await db("key_results").where({ id: krId }).first();
     expect(kr.title).toBe("Complete 10 user stories");
-    expect(kr.target_value).toBe(10);
-    expect(kr.current_value).toBe(0);
+    expect(Number(kr.target_value)).toBe(10);
+    expect(Number(kr.current_value)).toBe(0);
   });
 
   it("should update key result current_value", async () => {
     await db("key_results").where({ id: krId }).update({ current_value: 4 });
 
     const kr = await db("key_results").where({ id: krId }).first();
-    expect(kr.current_value).toBe(4);
+    expect(Number(kr.current_value)).toBe(4);
   });
 
   it("should compute goal progress from key results", async () => {
@@ -1087,11 +1087,14 @@ describe("GoalService (real DB)", () => {
     let weightedProgress = 0;
 
     for (const kr of krs) {
-      const krProgress = kr.target_value > 0
-        ? Math.min(100, Math.round((kr.current_value / kr.target_value) * 100))
+      const tv = Number(kr.target_value);
+      const cv = Number(kr.current_value);
+      const w = Number(kr.weight);
+      const krProgress = tv > 0
+        ? Math.min(100, Math.round((cv / tv) * 100))
         : 0;
-      weightedProgress += krProgress * kr.weight;
-      totalWeight += kr.weight;
+      weightedProgress += krProgress * w;
+      totalWeight += w;
     }
 
     const progress = totalWeight > 0 ? Math.round(weightedProgress / totalWeight) : 0;
