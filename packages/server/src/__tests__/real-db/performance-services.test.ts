@@ -128,6 +128,7 @@ describe("Test data setup", () => {
       id: cycleId,
       organization_id: TEST_ORG_ID,
       name: "Test Cycle Q1 2026",
+      type: "annual",
       description: "Test review cycle",
       start_date: "2026-01-01",
       end_date: "2026-03-31",
