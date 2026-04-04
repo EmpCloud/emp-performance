@@ -721,7 +721,7 @@ describe("CompetencyFrameworkService (real DB)", () => {
 
   it("should soft-delete framework (set deleted_at)", async () => {
     await db("competency_frameworks").where({ id: newFrameworkId }).update({
-      deleted_at: new Date().toISOString(),
+      deleted_at: new Date(),
     });
 
     const visible = await db("competency_frameworks")
