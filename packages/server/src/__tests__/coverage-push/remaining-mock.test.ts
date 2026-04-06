@@ -41,10 +41,11 @@ vi.mock("../../db/empcloud", () => ({
 // =========================================================================
 // Auth Service
 // =========================================================================
-import { login, register } from "../../services/auth/auth.service";
+import { login, register, ssoLogin, refreshToken } from "../../services/auth/auth.service";
 import { findUserByEmail, findUserById, findOrgById, createOrganization, createUser } from "../../db/empcloud";
 
 const mockedFindUserByEmail = vi.mocked(findUserByEmail);
+const mockedFindUserById = vi.mocked(findUserById);
 const mockedFindOrgById = vi.mocked(findOrgById);
 const mockedCreateOrganization = vi.mocked(createOrganization);
 const mockedCreateUser = vi.mocked(createUser);
@@ -151,6 +152,124 @@ describe("auth.service", () => {
 
       await register({ orgName: "Org", firstName: "A", lastName: "B", email: "a@b.com", password: "pass" });
       expect(mockedCreateOrganization).toHaveBeenCalledWith(expect.objectContaining({ country: "IN" }));
+    });
+  });
+
+  describe("ssoLogin", () => {
+    it("should throw for invalid SSO token (non-decodable)", async () => {
+      await expect(ssoLogin("not-a-jwt")).rejects.toThrow("Invalid SSO token");
+    });
+
+    it("should throw if SSO token has no sub", async () => {
+      const jwt = await import("jsonwebtoken");
+      const token = jwt.default.sign({ name: "test" }, "some-secret"); // no sub
+      await expect(ssoLogin(token)).rejects.toThrow("missing user id");
+    });
+
+    it("should throw if user not found", async () => {
+      const jwt = await import("jsonwebtoken");
+      const token = jwt.default.sign({ sub: 123 }, "some-secret");
+      mockedFindUserById.mockResolvedValue(null);
+      await expect(ssoLogin(token)).rejects.toThrow("not found or inactive");
+    });
+
+    it("should throw if user inactive (status != 1)", async () => {
+      const jwt = await import("jsonwebtoken");
+      const token = jwt.default.sign({ sub: 123 }, "some-secret");
+      mockedFindUserById.mockResolvedValue({ id: 123, status: 0, organization_id: 1 } as any);
+      await expect(ssoLogin(token)).rejects.toThrow("not found or inactive");
+    });
+
+    it("should throw if org inactive", async () => {
+      const jwt = await import("jsonwebtoken");
+      const token = jwt.default.sign({ sub: 123 }, "some-secret");
+      mockedFindUserById.mockResolvedValue({
+        id: 123, status: 1, organization_id: 1, first_name: "A", last_name: "B",
+        email: "test@test.com", role: "employee",
+      } as any);
+      mockedFindOrgById.mockResolvedValue(null);
+      await expect(ssoLogin(token)).rejects.toThrow("inactive");
+    });
+
+    it("should return tokens on valid SSO login (no jti)", async () => {
+      const jwt = await import("jsonwebtoken");
+      const token = jwt.default.sign({ sub: 123 }, "some-secret");
+      mockedFindUserById.mockResolvedValue({
+        id: 123, status: 1, organization_id: 1, first_name: "Test", last_name: "User",
+        email: "test@test.com", role: "employee",
+      } as any);
+      mockedFindOrgById.mockResolvedValue({ id: 1, name: "Test Org", is_active: true } as any);
+
+      const result = await ssoLogin(token);
+      expect(result.user.email).toBe("test@test.com");
+      expect(result.tokens.accessToken).toBeTruthy();
+    });
+
+    it("should handle jti validation when empcloud DB throws", async () => {
+      const jwt = await import("jsonwebtoken");
+      const token = jwt.default.sign({ sub: 123, jti: "some-jti" }, "some-secret");
+
+      // The dynamic import of empcloud will use our mock which doesn't have getEmpCloudDB
+      // This should fall through the catch block
+      mockedFindUserById.mockResolvedValue({
+        id: 123, status: 1, organization_id: 1, first_name: "Test", last_name: "User",
+        email: "test@test.com", role: "employee",
+      } as any);
+      mockedFindOrgById.mockResolvedValue({ id: 1, name: "Test Org", is_active: true } as any);
+
+      const result = await ssoLogin(token);
+      expect(result.tokens.accessToken).toBeTruthy();
+    });
+  });
+
+  describe("refreshToken", () => {
+    it("should throw for invalid token", async () => {
+      await expect(refreshToken("bad-token")).rejects.toThrow("Invalid or expired");
+    });
+
+    it("should throw for non-refresh token type", async () => {
+      const jwt = await import("jsonwebtoken");
+      const token = jwt.default.sign({ userId: 1, type: "access" }, "test-secret");
+      await expect(refreshToken(token)).rejects.toThrow("Invalid token type");
+    });
+
+    it("should throw if user not found", async () => {
+      const jwt = await import("jsonwebtoken");
+      const token = jwt.default.sign({ userId: 1, type: "refresh" }, "test-secret");
+      mockedFindUserById.mockResolvedValue(null);
+      await expect(refreshToken(token)).rejects.toThrow("not found or inactive");
+    });
+
+    it("should throw if user inactive", async () => {
+      const jwt = await import("jsonwebtoken");
+      const token = jwt.default.sign({ userId: 1, type: "refresh" }, "test-secret");
+      mockedFindUserById.mockResolvedValue({ id: 1, status: 0 } as any);
+      await expect(refreshToken(token)).rejects.toThrow("not found or inactive");
+    });
+
+    it("should throw if org inactive", async () => {
+      const jwt = await import("jsonwebtoken");
+      const token = jwt.default.sign({ userId: 1, type: "refresh" }, "test-secret");
+      mockedFindUserById.mockResolvedValue({
+        id: 1, status: 1, organization_id: 1, first_name: "A", last_name: "B",
+        email: "test@test.com", role: "employee",
+      } as any);
+      mockedFindOrgById.mockResolvedValue({ id: 1, is_active: false } as any);
+      await expect(refreshToken(token)).rejects.toThrow("inactive");
+    });
+
+    it("should return new tokens on valid refresh", async () => {
+      const jwt = await import("jsonwebtoken");
+      const token = jwt.default.sign({ userId: 1, type: "refresh" }, "test-secret");
+      mockedFindUserById.mockResolvedValue({
+        id: 1, status: 1, organization_id: 1, first_name: "A", last_name: "B",
+        email: "test@test.com", role: "hr_admin",
+      } as any);
+      mockedFindOrgById.mockResolvedValue({ id: 1, name: "Org", is_active: true } as any);
+
+      const result = await refreshToken(token);
+      expect(result.accessToken).toBeTruthy();
+      expect(result.refreshToken).toBeTruthy();
     });
   });
 });
