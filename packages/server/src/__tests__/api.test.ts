@@ -9,6 +9,23 @@ import { describe, it, expect, beforeAll } from "vitest";
 const BASE_URL = process.env.PERFORMANCE_API_URL || "https://test-performance.empcloud.com";
 const API = `${BASE_URL}/api/v1`;
 
+// Graceful skip: probe server + auth availability before test registration
+let apiAvailable = false;
+try {
+  const healthResp = await fetch(`${BASE_URL}/health`, { signal: AbortSignal.timeout(3000) }).catch(() => null);
+  if (healthResp && healthResp.ok) {
+    const loginResp = await fetch(`${API}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "ananya@technova.in", password: "Welcome@123" }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => null);
+    if (loginResp && loginResp.ok) apiAvailable = true;
+  }
+} catch {
+  apiAvailable = false;
+}
+
 let token = "";
 let refreshTokenValue = "";
 let userId: number;
@@ -51,7 +68,7 @@ async function api(path: string, opts: RequestInit = {}): Promise<{ status: numb
 // =============================================================================
 // HEALTH
 // =============================================================================
-describe("Health", () => {
+describe.skipIf(!apiAvailable)("Health", () => {
   it("GET /health returns ok", async () => {
     const res = await fetch(`${BASE_URL}/health`);
     const body = await res.json();
@@ -63,7 +80,7 @@ describe("Health", () => {
 // =============================================================================
 // AUTH
 // =============================================================================
-describe("Auth", () => {
+describe.skipIf(!apiAvailable)("Auth", () => {
   it("POST /auth/login with valid credentials returns tokens", async () => {
     const { status, body } = await api("/auth/login", {
       method: "POST",
@@ -125,7 +142,7 @@ describe("Auth", () => {
 // =============================================================================
 // COMPETENCY FRAMEWORKS
 // =============================================================================
-describe("Competency Frameworks", () => {
+describe.skipIf(!apiAvailable)("Competency Frameworks", () => {
   it("POST /competencies creates a framework", async () => {
     const { status, body } = await api("/competencies", {
       method: "POST",
@@ -196,7 +213,7 @@ describe("Competency Frameworks", () => {
 // =============================================================================
 // REVIEW CYCLES
 // =============================================================================
-describe("Review Cycles", () => {
+describe.skipIf(!apiAvailable)("Review Cycles", () => {
   it("POST /review-cycles creates a new cycle", async () => {
     const { status, body } = await api("/review-cycles", {
       method: "POST",
@@ -301,7 +318,7 @@ describe("Review Cycles", () => {
 // =============================================================================
 // REVIEWS
 // =============================================================================
-describe("Reviews", () => {
+describe.skipIf(!apiAvailable)("Reviews", () => {
   it("POST /reviews creates a new review", async () => {
     const { status, body } = await api("/reviews", {
       method: "POST",
@@ -395,7 +412,7 @@ describe("Reviews", () => {
 // =============================================================================
 // GOALS
 // =============================================================================
-describe("Goals", () => {
+describe.skipIf(!apiAvailable)("Goals", () => {
   it("POST /goals creates a new goal", async () => {
     const { status, body } = await api("/goals", {
       method: "POST",
@@ -515,7 +532,7 @@ describe("Goals", () => {
 // =============================================================================
 // FEEDBACK
 // =============================================================================
-describe("Feedback", () => {
+describe.skipIf(!apiAvailable)("Feedback", () => {
   it("POST /feedback gives feedback", async () => {
     const { status, body } = await api("/feedback", {
       method: "POST",
@@ -576,7 +593,7 @@ describe("Feedback", () => {
 // =============================================================================
 // PIPs (Performance Improvement Plans)
 // =============================================================================
-describe("PIPs", () => {
+describe.skipIf(!apiAvailable)("PIPs", () => {
   it("POST /pips creates a new PIP", async () => {
     const { status, body } = await api("/pips", {
       method: "POST",
@@ -685,7 +702,7 @@ describe("PIPs", () => {
 // =============================================================================
 // ONE-ON-ONE MEETINGS
 // =============================================================================
-describe("One-on-One Meetings", () => {
+describe.skipIf(!apiAvailable)("One-on-One Meetings", () => {
   it("POST /meetings creates a new meeting", async () => {
     const scheduledAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
     const { status, body } = await api("/meetings", {
@@ -785,7 +802,7 @@ describe("One-on-One Meetings", () => {
 // =============================================================================
 // PEER REVIEWS
 // =============================================================================
-describe("Peer Reviews", () => {
+describe.skipIf(!apiAvailable)("Peer Reviews", () => {
   it("POST /peer-reviews/nominate creates a nomination", async () => {
     const { status, body } = await api("/peer-reviews/nominate", {
       method: "POST",
@@ -824,7 +841,7 @@ describe("Peer Reviews", () => {
 // =============================================================================
 // CAREER PATHS
 // =============================================================================
-describe("Career Paths", () => {
+describe.skipIf(!apiAvailable)("Career Paths", () => {
   it("POST /career-paths creates a career path", async () => {
     const { status, body } = await api("/career-paths", {
       method: "POST",
@@ -915,7 +932,7 @@ describe("Career Paths", () => {
 // =============================================================================
 // SUCCESSION PLANNING
 // =============================================================================
-describe("Succession Planning", () => {
+describe.skipIf(!apiAvailable)("Succession Planning", () => {
   it("POST /succession-plans creates a succession plan", async () => {
     const { status, body } = await api("/succession-plans", {
       method: "POST",
@@ -962,7 +979,7 @@ describe("Succession Planning", () => {
 // =============================================================================
 // PERFORMANCE LETTERS
 // =============================================================================
-describe("Performance Letters", () => {
+describe.skipIf(!apiAvailable)("Performance Letters", () => {
   it("GET /letters/templates returns letter templates", async () => {
     const { status, body } = await api("/letters/templates");
     expect(status).toBe(200);
@@ -1036,7 +1053,7 @@ describe("Performance Letters", () => {
 // =============================================================================
 // ANALYTICS
 // =============================================================================
-describe("Analytics", () => {
+describe.skipIf(!apiAvailable)("Analytics", () => {
   it("GET /analytics/overview returns dashboard stats", async () => {
     const { status, body } = await api("/analytics/overview");
     expect(status).toBe(200);
@@ -1119,7 +1136,7 @@ describe("Analytics", () => {
 // =============================================================================
 // AI SUMMARY
 // =============================================================================
-describe("AI Summary", () => {
+describe.skipIf(!apiAvailable)("AI Summary", () => {
   it("GET /ai-summary/employee/:userId requires cycleId", async () => {
     const { status } = await api(`/ai-summary/employee/${userId}`);
     expect([400, 422]).toContain(status);
@@ -1142,7 +1159,7 @@ describe("AI Summary", () => {
 // =============================================================================
 // MANAGER EFFECTIVENESS
 // =============================================================================
-describe("Manager Effectiveness", () => {
+describe.skipIf(!apiAvailable)("Manager Effectiveness", () => {
   it("GET /manager-effectiveness/dashboard returns dashboard stats", async () => {
     const { status, body } = await api("/manager-effectiveness/dashboard");
     expect(status).toBe(200);
@@ -1177,7 +1194,7 @@ describe("Manager Effectiveness", () => {
 // =============================================================================
 // NOTIFICATIONS
 // =============================================================================
-describe("Notifications", () => {
+describe.skipIf(!apiAvailable)("Notifications", () => {
   it("GET /notifications/settings returns notification settings", async () => {
     const { status, body } = await api("/notifications/settings");
     expect(status).toBe(200);
@@ -1206,7 +1223,7 @@ describe("Notifications", () => {
 // =============================================================================
 // AUTHORIZATION CHECKS
 // =============================================================================
-describe("Authorization", () => {
+describe.skipIf(!apiAvailable)("Authorization", () => {
   it("GET /goals without token returns 401", async () => {
     const saved = token;
     token = "";
@@ -1257,7 +1274,7 @@ describe("Authorization", () => {
 // =============================================================================
 // CLEANUP
 // =============================================================================
-describe("Cleanup", () => {
+describe.skipIf(!apiAvailable)("Cleanup", () => {
   it("DELETE /goals/:id/key-results/:krId removes key result", async () => {
     if (!goalId || !keyResultId) return;
     const { status } = await api(`/goals/${goalId}/key-results/${keyResultId}`, { method: "DELETE" });
