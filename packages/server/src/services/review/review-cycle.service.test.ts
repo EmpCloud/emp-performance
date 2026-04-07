@@ -80,7 +80,7 @@ describe("review-cycle.service", () => {
       const expected = makeCycle();
       mockDB.create.mockResolvedValue(expected);
 
-      const result = await createCycle(ORG_ID, USER_ID, input);
+      const result = await createCycle(ORG_ID, input, USER_ID);
 
       expect(mockDB.create).toHaveBeenCalledWith(
         "review_cycles",
@@ -106,7 +106,7 @@ describe("review-cycle.service", () => {
       };
       mockDB.create.mockResolvedValue(makeCycle(input));
 
-      await createCycle(ORG_ID, USER_ID, input);
+      await createCycle(ORG_ID, input, USER_ID);
 
       expect(mockDB.create).toHaveBeenCalledWith(
         "review_cycles",

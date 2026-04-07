@@ -170,9 +170,9 @@ describe("analytics.service", () => {
 
       mockDB.raw.mockResolvedValue([[{ id: "rev-1" }]]); // latest review
       mockDB.findMany
+        .mockResolvedValueOnce({ data: [{ competency_id: "comp-1", rating: 4 }], total: 1, page: 1, limit: 100, totalPages: 1 }) // ratings (fetched first when reviewId exists)
         .mockResolvedValueOnce({ data: [{ id: "fw-1" }], total: 1, page: 1, limit: 100, totalPages: 1 }) // frameworks
-        .mockResolvedValueOnce({ data: [{ id: "comp-1", name: "Leadership", category: "leadership", weight: 3 }], total: 1, page: 1, limit: 100, totalPages: 1 }) // competencies from framework
-        .mockResolvedValueOnce({ data: [{ competency_id: "comp-1", rating: 4 }], total: 1, page: 1, limit: 100, totalPages: 1 }); // ratings
+        .mockResolvedValueOnce({ data: [{ id: "comp-1", name: "Leadership", category: "leadership", weight: 3 }], total: 1, page: 1, limit: 100, totalPages: 1 }); // competencies from framework
 
       const result = await getSkillsGap(ORG, 10);
       expect(result.employee_id).toBe(10);
@@ -197,9 +197,9 @@ describe("analytics.service", () => {
       mockDB.findOne.mockResolvedValue(null);
       mockDB.raw.mockResolvedValue([[{ id: "rev-1" }]]);
       mockDB.findMany
-        .mockResolvedValueOnce({ data: [{ id: "fw-1" }], total: 1, page: 1, limit: 100, totalPages: 1 })
-        .mockResolvedValueOnce({ data: [{ id: "comp-1", name: "Core", category: "core", weight: 3 }], total: 1, page: 1, limit: 100, totalPages: 1 })
-        .mockResolvedValueOnce({ data: [{ competency_id: "comp-1", rating: 3 }], total: 1, page: 1, limit: 100, totalPages: 1 });
+        .mockResolvedValueOnce({ data: [{ competency_id: "comp-1", rating: 3 }], total: 1, page: 1, limit: 100, totalPages: 1 }) // ratings (fetched first when reviewId exists)
+        .mockResolvedValueOnce({ data: [{ id: "fw-1" }], total: 1, page: 1, limit: 100, totalPages: 1 }) // frameworks
+        .mockResolvedValueOnce({ data: [{ id: "comp-1", name: "Core", category: "core", weight: 3 }], total: 1, page: 1, limit: 100, totalPages: 1 }); // competencies
 
       const result = await getSkillsGap(ORG, 10);
       expect(result.competencies[0].status).toBe("meets");

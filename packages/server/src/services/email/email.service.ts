@@ -39,6 +39,12 @@ export async function sendEmail(
   subject: string,
   htmlBody: string,
 ): Promise<void> {
+  // Skip email sending in test environment
+  if (process.env.NODE_ENV === "test") {
+    logger.info(`[TEST] Email skipped to ${Array.isArray(to) ? to.join(", ") : to}: ${subject}`);
+    return;
+  }
+
   try {
     const transport = getTransporter();
     await transport.sendMail({

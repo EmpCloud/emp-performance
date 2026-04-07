@@ -1516,7 +1516,7 @@ describe("pip.service", () => {
 
     it("should throw if status is not active/extended", async () => {
       mockDB.findOne.mockResolvedValue({ id: "pip-1", status: "completed_success" });
-      await expect(closePIP(ORG, "pip-1", "completed_success")).rejects.toThrow("INVALID_STATUS");
+      await expect(closePIP(ORG, "pip-1", "completed_success")).rejects.toThrow("Only active or extended PIPs can be closed");
     });
 
     it("should close active PIP as success", async () => {
@@ -1549,7 +1549,7 @@ describe("pip.service", () => {
 
     it("should throw if not active/extended", async () => {
       mockDB.findOne.mockResolvedValue({ id: "pip-1", status: "completed_success" });
-      await expect(extendPIP(ORG, "pip-1", "2026-06-30")).rejects.toThrow("INVALID_STATUS");
+      await expect(extendPIP(ORG, "pip-1", "2026-06-30")).rejects.toThrow("Only active or extended PIPs can be extended");
     });
 
     it("should extend PIP", async () => {
