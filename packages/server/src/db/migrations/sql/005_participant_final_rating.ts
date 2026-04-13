@@ -1,4 +1,4 @@
-import { Knex } from "knex";
+import type { Knex } from "knex";
 
 export async function up(knex: Knex): Promise<void> {
   // Add final_rating column to review_cycle_participants for storing computed ratings on cycle close
