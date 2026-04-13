@@ -1,4 +1,4 @@
-import { Knex } from "knex";
+import type { Knex } from "knex";
 
 export async function up(knex: Knex): Promise<void> {
   // Add general settings columns to notification_settings table
