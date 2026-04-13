@@ -9,8 +9,8 @@ export function LoginPage() {
   const navigate = useNavigate();
   const loginMutation = useLogin();
   const login = useAuthStore((s) => s.login);
-  const [email, setEmail] = useState("ananya@technova.in");
-  const [password, setPassword] = useState("Welcome@123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -121,11 +121,6 @@ export function LoginPage() {
                 )}
               </button>
             </form>
-
-            <div className="mt-4 rounded-lg bg-gray-50 p-3 text-xs text-gray-500">
-              <p className="font-medium">Demo credentials:</p>
-              <p>ananya@technova.in / Welcome@123</p>
-            </div>
           </div>
 
           <p className="mt-6 text-center text-xs text-gray-400">Part of the EMP HRMS ecosystem</p>
