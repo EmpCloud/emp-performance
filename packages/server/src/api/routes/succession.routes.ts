@@ -49,7 +49,7 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
 router.get("/:id", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const orgId = req.user!.empcloudOrgId;
-    const result = await analyticsService.getSuccessionPlan(orgId, req.params.id);
+    const result = await analyticsService.getSuccessionPlan(orgId, req.params.id as string);
     sendSuccess(res, result);
   } catch (err) {
     next(err);
@@ -64,7 +64,7 @@ router.post("/:id/candidates", async (req: Request, res: Response, next: NextFun
     if (!employee_id) {
       throw new ValidationError("employee_id is required");
     }
-    const result = await analyticsService.addSuccessionCandidate(orgId, req.params.id, {
+    const result = await analyticsService.addSuccessionCandidate(orgId, req.params.id as string, {
       employee_id: Number(employee_id),
       readiness,
       development_notes,
@@ -85,8 +85,8 @@ router.put(
       const { readiness, development_notes, nine_box_position } = req.body;
       const result = await analyticsService.updateSuccessionCandidate(
         orgId,
-        req.params.id,
-        req.params.candidateId,
+        req.params.id as string,
+        req.params.candidateId as string,
         { readiness, development_notes, nine_box_position },
       );
       sendSuccess(res, result);

@@ -33,7 +33,7 @@ router.get("/", async (req: Request, res: Response, next: NextFunction) => {
 router.get("/:id", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const orgId = req.user!.empcloudOrgId;
-    const result = await careerPathService.getPath(orgId, req.params.id);
+    const result = await careerPathService.getPath(orgId, req.params.id as string);
     sendSuccess(res, result);
   } catch (err) {
     next(err);
@@ -69,7 +69,7 @@ router.put(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const orgId = req.user!.empcloudOrgId;
-      const result = await careerPathService.updatePath(orgId, req.params.id, req.body);
+      const result = await careerPathService.updatePath(orgId, req.params.id as string, req.body);
       sendSuccess(res, result);
     } catch (err) {
       next(err);
@@ -84,7 +84,7 @@ router.delete(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const orgId = req.user!.empcloudOrgId;
-      await careerPathService.deletePath(orgId, req.params.id);
+      await careerPathService.deletePath(orgId, req.params.id as string);
       sendSuccess(res, { deleted: true });
     } catch (err) {
       next(err);
@@ -105,7 +105,7 @@ router.post(
       const orgId = req.user!.empcloudOrgId;
       const { title, level, description, requirements, min_years_experience } = req.body;
       if (!title || level === undefined) throw new ValidationError("Title and level are required");
-      const result = await careerPathService.addLevel(orgId, req.params.pathId, {
+      const result = await careerPathService.addLevel(orgId, req.params.pathId as string, {
         title,
         level,
         description,
@@ -126,7 +126,7 @@ router.put(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const orgId = req.user!.empcloudOrgId;
-      const result = await careerPathService.updateLevel(orgId, req.params.levelId, req.body);
+      const result = await careerPathService.updateLevel(orgId, req.params.levelId as string, req.body);
       sendSuccess(res, result);
     } catch (err) {
       next(err);
@@ -141,7 +141,7 @@ router.delete(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const orgId = req.user!.empcloudOrgId;
-      await careerPathService.removeLevel(orgId, req.params.levelId);
+      await careerPathService.removeLevel(orgId, req.params.levelId as string);
       sendSuccess(res, { deleted: true });
     } catch (err) {
       next(err);
@@ -186,7 +186,7 @@ router.get(
       const orgId = req.user!.empcloudOrgId;
       const result = await careerPathService.getEmployeeTrack(
         orgId,
-        parseInt(req.params.employeeId),
+        parseInt(req.params.employeeId as string),
       );
       sendSuccess(res, result);
     } catch (err) {

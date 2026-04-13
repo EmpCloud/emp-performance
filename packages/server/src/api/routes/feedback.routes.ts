@@ -100,7 +100,7 @@ router.get("/wall", async (req: Request, res: Response, next: NextFunction) => {
 router.delete("/:id", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const orgId = req.user!.empcloudOrgId;
-    await feedbackService.deleteFeedback(orgId, req.params.id);
+    await feedbackService.deleteFeedback(orgId, req.params.id as string);
     sendSuccess(res, { deleted: true });
   } catch (err) {
     next(err);

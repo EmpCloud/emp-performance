@@ -157,7 +157,7 @@ router.get(
       const deptId = req.params.deptId;
       if (!deptId) throw new ValidationError("deptId is required");
 
-      const result = await analyticsService.getDepartmentSkillsGap(orgId, deptId);
+      const result = await analyticsService.getDepartmentSkillsGap(orgId, deptId as string);
       sendSuccess(res, result);
     } catch (err) {
       next(err);
@@ -169,7 +169,7 @@ router.get(
 router.get("/skills-gap/:employeeId", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const orgId = req.user!.empcloudOrgId;
-    const employeeId = parseInt(req.params.employeeId);
+    const employeeId = parseInt(req.params.employeeId as string);
     if (isNaN(employeeId)) throw new ValidationError("employeeId must be a number");
 
     const result = await analyticsService.getSkillsGap(orgId, employeeId);

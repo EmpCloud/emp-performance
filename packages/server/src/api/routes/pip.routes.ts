@@ -129,7 +129,7 @@ router.put(
     try {
       const orgId = req.user!.empcloudOrgId;
       const { id } = idParamSchema.parse(req.params);
-      const objId = req.params.objId;
+      const objId = req.params.objId as string;
 
       const objective = await pipService.updateObjective(orgId, id, objId, req.body);
       return sendSuccess(res, objective);

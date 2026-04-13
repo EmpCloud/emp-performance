@@ -61,7 +61,7 @@ router.put(
       const orgId = req.user!.empcloudOrgId;
       const result = await peerReviewService.approveNomination(
         orgId,
-        req.params.id,
+        req.params.id as string,
         req.user!.empcloudUserId,
       );
       sendSuccess(res, result);
@@ -80,7 +80,7 @@ router.put(
       const orgId = req.user!.empcloudOrgId;
       const result = await peerReviewService.declineNomination(
         orgId,
-        req.params.id,
+        req.params.id as string,
         req.user!.empcloudUserId,
       );
       sendSuccess(res, result);

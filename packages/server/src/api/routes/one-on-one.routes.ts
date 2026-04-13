@@ -33,7 +33,7 @@ router.get("/", async (req: Request, res: Response, next: NextFunction) => {
 router.get("/:id", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const orgId = req.user!.empcloudOrgId;
-    const result = await meetingService.getMeeting(orgId, req.params.id);
+    const result = await meetingService.getMeeting(orgId, req.params.id as string);
     sendSuccess(res, result);
   } catch (err) {
     next(err);
@@ -65,7 +65,7 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
 router.put("/:id", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const orgId = req.user!.empcloudOrgId;
-    const result = await meetingService.updateMeeting(orgId, req.params.id, req.body);
+    const result = await meetingService.updateMeeting(orgId, req.params.id as string, req.body);
     sendSuccess(res, result);
   } catch (err) {
     next(err);
@@ -76,7 +76,7 @@ router.put("/:id", async (req: Request, res: Response, next: NextFunction) => {
 router.post("/:id/complete", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const orgId = req.user!.empcloudOrgId;
-    const result = await meetingService.completeMeeting(orgId, req.params.id);
+    const result = await meetingService.completeMeeting(orgId, req.params.id as string);
     sendSuccess(res, result);
   } catch (err) {
     next(err);
@@ -93,7 +93,7 @@ const agendaHandler = async (req: Request, res: Response, next: NextFunction) =>
     const orgId = req.user!.empcloudOrgId;
     const { title, description, order } = req.body;
     if (!title) throw new ValidationError("Title is required");
-    const result = await meetingService.addAgendaItem(orgId, req.params.meetingId, {
+    const result = await meetingService.addAgendaItem(orgId, req.params.meetingId as string, {
       title,
       description,
       added_by: req.user!.empcloudUserId,
@@ -111,7 +111,7 @@ router.post("/:meetingId/agenda-items", agendaHandler);
 router.put("/agenda/:itemId", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const orgId = req.user!.empcloudOrgId;
-    const result = await meetingService.updateAgendaItem(orgId, req.params.itemId, req.body);
+    const result = await meetingService.updateAgendaItem(orgId, req.params.itemId as string, req.body);
     sendSuccess(res, result);
   } catch (err) {
     next(err);
@@ -122,7 +122,7 @@ router.put("/agenda/:itemId", async (req: Request, res: Response, next: NextFunc
 router.post("/agenda/:itemId/complete", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const orgId = req.user!.empcloudOrgId;
-    const result = await meetingService.completeAgendaItem(orgId, req.params.itemId);
+    const result = await meetingService.completeAgendaItem(orgId, req.params.itemId as string);
     sendSuccess(res, result);
   } catch (err) {
     next(err);

@@ -4,7 +4,7 @@
 // jobs. Handles graceful Redis unavailability — logs warning, does not crash.
 // ============================================================================
 
-import { Queue, Worker, QueueScheduler } from "bullmq";
+import { Queue, Worker } from "bullmq";
 import IORedis from "ioredis";
 import { config } from "../config";
 import { logger } from "../utils/logger";
@@ -153,7 +153,7 @@ export async function initJobQueues(): Promise<void> {
       return;
     }
 
-    const connectionOpts = { connection };
+    const connectionOpts = { connection } as any;
 
     // Create queues
     queues = {

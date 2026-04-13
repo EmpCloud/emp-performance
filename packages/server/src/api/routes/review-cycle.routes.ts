@@ -161,7 +161,7 @@ router.delete(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = idParamSchema.parse(req.params);
-      const participantId = req.params.participantId;
+      const participantId = req.params.participantId as string;
       const orgId = req.user!.empcloudOrgId;
       await cycleService.removeParticipant(orgId, id, participantId);
       return sendSuccess(res, { message: "Participant removed" });

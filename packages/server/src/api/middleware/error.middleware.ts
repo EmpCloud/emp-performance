@@ -24,7 +24,7 @@ export function errorHandler(err: Error, _req: Request, res: Response, _next: Ne
       error: {
         code: "VALIDATION_ERROR",
         message: "Invalid request data",
-        details: err.flatten().fieldErrors,
+        details: err.flatten().fieldErrors as Record<string, string[]>,
       },
     };
     return res.status(400).json(response);

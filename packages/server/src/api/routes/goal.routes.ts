@@ -155,7 +155,7 @@ router.put("/:id/key-results/:krId", async (req: Request, res: Response, next: N
   try {
     const orgId = req.user!.empcloudOrgId;
     const { id } = idParamSchema.parse(req.params);
-    const krId = req.params.krId;
+    const krId = req.params.krId as string;
 
     const kr = await goalService.updateKeyResult(orgId, id, krId, req.body);
     return sendSuccess(res, kr);
@@ -173,7 +173,7 @@ router.delete(
     try {
       const orgId = req.user!.empcloudOrgId;
       const { id } = idParamSchema.parse(req.params);
-      const krId = req.params.krId;
+      const krId = req.params.krId as string;
 
       await goalService.deleteKeyResult(orgId, id, krId);
       return sendSuccess(res, { deleted: true });

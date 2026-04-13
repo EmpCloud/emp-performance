@@ -119,7 +119,7 @@ router.put(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = idParamSchema.parse(req.params);
-      const compId = req.params.compId;
+      const compId = req.params.compId as string;
       const data = addCompetencySchema.partial().parse(req.body);
       const orgId = req.user!.empcloudOrgId;
       const competency = await frameworkService.updateCompetency(orgId, id, compId, data);
@@ -140,7 +140,7 @@ router.delete(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = idParamSchema.parse(req.params);
-      const compId = req.params.compId;
+      const compId = req.params.compId as string;
       const orgId = req.user!.empcloudOrgId;
       await frameworkService.removeCompetency(orgId, id, compId);
       return sendSuccess(res, { message: "Competency removed" });

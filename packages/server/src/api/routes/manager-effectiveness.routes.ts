@@ -69,7 +69,7 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const orgId = req.user!.empcloudOrgId;
-      const managerId = parseInt(req.params.managerId);
+      const managerId = parseInt(req.params.managerId as string);
       const { period } = req.body;
       if (isNaN(managerId)) throw new ValidationError("managerId must be a number");
       if (!period) throw new ValidationError("period is required in body (e.g. 2026-Q1)");
@@ -85,7 +85,7 @@ router.post(
 router.get("/:managerId", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const orgId = req.user!.empcloudOrgId;
-    const managerId = parseInt(req.params.managerId);
+    const managerId = parseInt(req.params.managerId as string);
     const period = req.query.period as string;
     if (isNaN(managerId)) throw new ValidationError("managerId must be a number");
     if (!period) throw new ValidationError("period query parameter is required (e.g. 2026-Q1)");

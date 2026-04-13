@@ -18,7 +18,7 @@ router.get("/review/:reviewId", async (req: Request, res: Response, next: NextFu
     const orgId = req.user!.empcloudOrgId;
     const { reviewId } = req.params;
     if (!reviewId) throw new ValidationError("reviewId is required");
-    const result = await aiSummaryService.generateReviewSummary(orgId, reviewId);
+    const result = await aiSummaryService.generateReviewSummary(orgId, reviewId as string);
     sendSuccess(res, result);
   } catch (err) {
     next(err);
@@ -29,7 +29,7 @@ router.get("/review/:reviewId", async (req: Request, res: Response, next: NextFu
 router.get("/employee/:userId", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const orgId = req.user!.empcloudOrgId;
-    const userId = parseInt(req.params.userId);
+    const userId = parseInt(req.params.userId as string);
     const cycleId = req.query.cycleId as string;
     if (isNaN(userId)) throw new ValidationError("userId must be a number");
     if (!cycleId) throw new ValidationError("cycleId query parameter is required");
@@ -47,7 +47,7 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const orgId = req.user!.empcloudOrgId;
-      const managerId = parseInt(req.params.managerId);
+      const managerId = parseInt(req.params.managerId as string);
       const cycleId = req.query.cycleId as string;
       if (isNaN(managerId)) throw new ValidationError("managerId must be a number");
       if (!cycleId) throw new ValidationError("cycleId query parameter is required");
