@@ -24,7 +24,7 @@ export async function up(knex: Knex): Promise<void> {
 
     t.index(["organization_id", "period"]);
     t.index(["manager_user_id"]);
-    t.unique(["organization_id", "manager_user_id", "period"]);
+    t.unique(["organization_id", "manager_user_id", "period"], { indexName: "uq_mes_org_mgr_period" });
   });
 }
 

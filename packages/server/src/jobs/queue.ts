@@ -68,10 +68,10 @@ function getRedisConnection(): IORedis {
 // ---------------------------------------------------------------------------
 
 export const QUEUE_NAMES = {
-  REVIEW_REMINDERS: "performance:review-reminders",
-  PIP_REMINDERS: "performance:pip-reminders",
-  MEETING_REMINDERS: "performance:meeting-reminders",
-  GOAL_REMINDERS: "performance:goal-reminders",
+  REVIEW_REMINDERS: "performance-review-reminders",
+  PIP_REMINDERS: "performance-pip-reminders",
+  MEETING_REMINDERS: "performance-meeting-reminders",
+  GOAL_REMINDERS: "performance-goal-reminders",
 } as const;
 
 // ---------------------------------------------------------------------------
