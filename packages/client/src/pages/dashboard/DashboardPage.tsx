@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import {
   BarChart3,
   Target,
@@ -21,12 +22,13 @@ interface OverviewData {
   completedGoals: number;
 }
 
+// #1: link each stat card to its detail page so users can drill in.
 const STAT_CARDS = [
-  { key: "activeCycles", label: "Active Cycles", icon: RefreshCw, color: "bg-blue-50 text-blue-600" },
-  { key: "pendingReviews", label: "Pending Reviews", icon: ClipboardCheck, color: "bg-amber-50 text-amber-600" },
-  { key: "goalCompletionRate", label: "Goal Completion", icon: Target, color: "bg-green-50 text-green-600", suffix: "%" },
-  { key: "pipCount", label: "Active PIPs", icon: AlertTriangle, color: "bg-red-50 text-red-600" },
-  { key: "feedbackCount", label: "Total Feedback", icon: MessageSquare, color: "bg-purple-50 text-purple-600" },
+  { key: "activeCycles", label: "Active Cycles", icon: RefreshCw, color: "bg-blue-50 text-blue-600", href: "/review-cycles" },
+  { key: "pendingReviews", label: "Pending Reviews", icon: ClipboardCheck, color: "bg-amber-50 text-amber-600", href: "/reviews/my" },
+  { key: "goalCompletionRate", label: "Goal Completion", icon: Target, color: "bg-green-50 text-green-600", suffix: "%", href: "/goals" },
+  { key: "pipCount", label: "Active PIPs", icon: AlertTriangle, color: "bg-red-50 text-red-600", href: "/pips" },
+  { key: "feedbackCount", label: "Total Feedback", icon: MessageSquare, color: "bg-purple-50 text-purple-600", href: "/feedback" },
 ] as const;
 
 export function DashboardPage() {
@@ -50,15 +52,16 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* Stat Cards */}
+      {/* Stat Cards — #1: clickable, each redirects to its detail page */}
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {STAT_CARDS.map((card) => {
           const Icon = card.icon;
           const value = overview ? (overview as any)[card.key] : null;
           return (
-            <div
+            <Link
               key={card.key}
-              className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"
+              to={card.href}
+              className="block rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-all hover:border-brand-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-500"
             >
               <div className="flex items-center gap-3">
                 <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${card.color}`}>
@@ -76,7 +79,7 @@ export function DashboardPage() {
                   )}
                 </div>
               </div>
-            </div>
+            </Link>
           );
         })}
       </div>
@@ -103,27 +106,31 @@ export function DashboardPage() {
           </div>
         </div>
 
-        {/* Recent Activity Placeholder */}
+        {/* Recent Activity — #2: each entry links to its relevant module */}
         <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-gray-900">Recent Activity</h2>
           <p className="mt-1 text-sm text-gray-500">Latest performance events</p>
           <div className="mt-4 space-y-3">
             <ActivityItem
+              to="/review-cycles"
               icon={<RefreshCw className="h-4 w-4 text-blue-500" />}
               text="Review cycle status updated"
               time="Recently"
             />
             <ActivityItem
+              to="/feedback"
               icon={<MessageSquare className="h-4 w-4 text-purple-500" />}
               text="New feedback received"
               time="Recently"
             />
             <ActivityItem
+              to="/goals"
               icon={<Target className="h-4 w-4 text-green-500" />}
               text="Goal progress updated"
               time="Recently"
             />
             <ActivityItem
+              to="/analytics"
               icon={<BarChart3 className="h-4 w-4 text-amber-500" />}
               text="Analytics data refreshed"
               time="Recently"
@@ -135,14 +142,17 @@ export function DashboardPage() {
   );
 }
 
-function ActivityItem({ icon, text, time }: { icon: React.ReactNode; text: string; time: string }) {
+function ActivityItem({ to, icon, text, time }: { to: string; icon: React.ReactNode; text: string; time: string }) {
   return (
-    <div className="flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-gray-50">
+    <Link
+      to={to}
+      className="flex items-center gap-3 rounded-lg px-3 py-2 transition-colors hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-brand-500"
+    >
       <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-50">{icon}</div>
       <div className="flex-1">
         <p className="text-sm text-gray-700">{text}</p>
       </div>
       <span className="text-xs text-gray-400">{time}</span>
-    </div>
+    </Link>
   );
 }
