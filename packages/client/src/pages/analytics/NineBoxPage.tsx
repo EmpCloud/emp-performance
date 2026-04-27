@@ -62,8 +62,10 @@ export function NineBoxPage() {
 
   const cycles = cyclesData?.data?.data || [];
 
-  // Auto-select first cycle
-  const activeCycleId = selectedCycleId || (cycles.length > 0 ? cycles[0].id : "");
+  // Wait for the user to pick a cycle — auto-selecting the most recent
+  // one was misleading, since the page presented data without the user
+  // realising it (#23).
+  const activeCycleId = selectedCycleId;
 
   const { data: nineBoxData, isLoading } = useQuery({
     queryKey: ["nine-box", activeCycleId],
@@ -120,29 +122,29 @@ export function NineBoxPage() {
       ) : (
         <div className="mt-6">
           {/* Grid */}
-          <div className="flex">
-            {/* Y-axis label */}
-            <div className="flex flex-col justify-between pr-3 py-1" style={{ width: "40px" }}>
-              {POTENTIAL_LABELS.map((label) => (
-                <div
-                  key={label}
-                  className="flex-1 flex items-center"
-                >
-                  <span className="text-xs font-medium text-gray-500 -rotate-90 whitespace-nowrap origin-center">
-                    {label}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex-1">
-              {/* Y-axis title */}
-              <div className="text-center mb-2">
-                <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
-                  Potential &rarr;
+          <div className="flex items-stretch gap-3">
+            {/* Y-axis: vertical "Potential" title + per-row labels */}
+            <div className="flex shrink-0 items-stretch gap-2">
+              <div className="flex items-center">
+                <span className="text-xs font-semibold uppercase tracking-wide text-gray-600 [writing-mode:vertical-rl] rotate-180 whitespace-nowrap">
+                  Potential &uarr;
                 </span>
               </div>
+              <div className="flex w-24 flex-col">
+                {POTENTIAL_LABELS.map((label) => (
+                  <div
+                    key={label}
+                    className="flex flex-1 items-center justify-end pr-2 text-right"
+                  >
+                    <span className="text-xs font-medium text-gray-500 leading-tight">
+                      {label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
 
+            <div className="flex-1 min-w-0">
               {/* The 3x3 grid */}
               <div className="grid grid-cols-3 gap-2">
                 {GRID_LAYOUT.map((cell) => {
@@ -197,7 +199,7 @@ export function NineBoxPage() {
               </div>
               <div className="text-center mt-1">
                 <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
-                  &larr; Performance &rarr;
+                  Performance &rarr;
                 </span>
               </div>
             </div>
