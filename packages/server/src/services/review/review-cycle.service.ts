@@ -27,6 +27,17 @@ export async function createCycle(
   createdBy: number,
 ): Promise<ReviewCycle> {
   const db = getDB();
+
+  // End date must not precede start date — guard the DB write so the API
+  // returns a clear validation error instead of letting an invalid range
+  // through (#11).
+  if (data.end_date < data.start_date) {
+    throw new ValidationError("End date cannot be before start date");
+  }
+  if (data.review_deadline && data.review_deadline < data.start_date) {
+    throw new ValidationError("Review deadline cannot be before start date");
+  }
+
   const record: Record<string, any> = {
     id: uuidv4(),
     organization_id: orgId,
@@ -63,14 +74,65 @@ export async function listCycles(
   if (params.status) filters.status = params.status;
   if (params.type) filters.type = params.type;
 
-  const result = await db.findMany<ReviewCycle>("review_cycles", {
-    page,
-    limit: perPage,
-    filters,
-    sort: params.sort
-      ? { field: params.sort, order: params.order ?? "desc" }
-      : { field: "created_at", order: "desc" },
-  });
+  const search = (params.search ?? "").trim();
+  let result: { data: ReviewCycle[]; total: number; page: number; perPage: number; totalPages: number };
+
+  if (search) {
+    // The shared findMany helper has no LIKE support, so fall through to a
+    // raw query for free-text search on name/description (#13).
+    const offset = (page - 1) * perPage;
+    const where: string[] = ["organization_id = ?"];
+    const args: any[] = [orgId];
+    if (params.status) {
+      where.push("status = ?");
+      args.push(params.status);
+    }
+    if (params.type) {
+      where.push("type = ?");
+      args.push(params.type);
+    }
+    where.push("(name LIKE ? OR description LIKE ?)");
+    const term = `%${search}%`;
+    args.push(term, term);
+
+    const orderField = params.sort ?? "created_at";
+    const orderDir = (params.order ?? "desc").toUpperCase() === "ASC" ? "ASC" : "DESC";
+
+    const rowsRes = await db.raw<any>(
+      `SELECT * FROM review_cycles WHERE ${where.join(" AND ")} ORDER BY ${orderField} ${orderDir} LIMIT ? OFFSET ?`,
+      [...args, perPage, offset],
+    );
+    const totalRes = await db.raw<any>(
+      `SELECT COUNT(*) AS c FROM review_cycles WHERE ${where.join(" AND ")}`,
+      args,
+    );
+    const rows = (Array.isArray(rowsRes) ? rowsRes[0] || rowsRes : []) as any[];
+    const totalRows = (Array.isArray(totalRes) ? totalRes[0] || totalRes : []) as any[];
+    const total = Number(totalRows?.[0]?.c ?? 0);
+    result = {
+      data: rows as ReviewCycle[],
+      total,
+      page,
+      perPage,
+      totalPages: Math.max(1, Math.ceil(total / perPage)),
+    };
+  } else {
+    const queryResult = await db.findMany<ReviewCycle>("review_cycles", {
+      page,
+      limit: perPage,
+      filters,
+      sort: params.sort
+        ? { field: params.sort, order: params.order ?? "desc" }
+        : { field: "created_at", order: "desc" },
+    });
+    result = {
+      data: queryResult.data,
+      total: queryResult.total,
+      page: queryResult.page,
+      perPage: queryResult.limit,
+      totalPages: queryResult.totalPages,
+    };
+  }
 
   // Attach participant counts
   const cyclesWithCounts = await Promise.all(
@@ -129,6 +191,21 @@ export async function updateCycle(
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
+
+// Delete a cycle that hasn't started yet. Block deletion of active cycles
+// so we don't drop reviews mid-flight.
+export async function deleteCycle(orgId: number, id: string): Promise<void> {
+  const db = getDB();
+  const cycle = await db.findOne<ReviewCycle>("review_cycles", {
+    id,
+    organization_id: orgId,
+  });
+  if (!cycle) throw new NotFoundError("ReviewCycle", id);
+  if (cycle.status !== "draft") {
+    throw new ValidationError("Only draft cycles can be deleted");
+  }
+  await db.delete("review_cycles", id);
+}
 
 export async function launchCycle(orgId: number, id: string): Promise<ReviewCycle> {
   const db = getDB();
