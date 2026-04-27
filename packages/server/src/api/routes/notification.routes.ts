@@ -20,6 +20,7 @@ import {
   updateNotificationSettings,
 } from "../../services/notification/notification-settings.service";
 import { sendEmail } from "../../services/email/email.service";
+import { ValidationError } from "../../utils/errors";
 
 const router = Router();
 router.use(authenticate);
@@ -152,10 +153,25 @@ router.post(
       const email = req.user!.email;
       const name = `${req.user!.firstName} ${req.user!.lastName}`;
 
-      await sendEmail(
-        email,
-        "EMP Performance — Test Email",
-        `<!DOCTYPE html>
+      // Validate SMTP config up-front so we can return an actionable
+      // message instead of letting nodemailer fail with a stack trace
+      // when the host hasn't been set (#27).
+      const { config } = await import("../../config");
+      const host = config.email.host;
+      if (!host || host === "localhost") {
+        throw new ValidationError(
+          "SMTP host is not configured. Set SMTP_HOST (and optionally SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM) on the server before sending test emails.",
+        );
+      }
+      if (!email) {
+        throw new ValidationError("No email address on the current user; cannot send a test email.");
+      }
+
+      try {
+        await sendEmail(
+          email,
+          "EMP Performance — Test Email",
+          `<!DOCTYPE html>
 <html><body style="margin:0;padding:32px;font-family:sans-serif;background:#f4f5f7;">
   <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:8px;padding:32px;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
     <h2 style="color:#4f46e5;margin:0 0 16px;">Test Email Successful</h2>
@@ -164,7 +180,13 @@ router.post(
     <p style="color:#6b7280;font-size:13px;margin-top:24px;">Sent at ${new Date().toISOString()}</p>
   </div>
 </body></html>`,
-      );
+        );
+      } catch (sendErr: any) {
+        // Surface SMTP error detail (auth failed, connection refused,
+        // etc.) so the operator knows what to fix.
+        const detail = sendErr?.message || "unknown SMTP error";
+        throw new ValidationError(`SMTP send failed: ${detail}`);
+      }
 
       return sendSuccess(res, { message: `Test email sent to ${email}` });
     } catch (err) {

@@ -5,7 +5,7 @@
 
 import { v4 as uuidv4 } from "uuid";
 import { getDB } from "../../db/adapters";
-import { NotFoundError } from "../../utils/errors";
+import { NotFoundError, ValidationError } from "../../utils/errors";
 import type {
   SuccessionPlan,
   SuccessionCandidate,
@@ -26,6 +26,14 @@ export async function createSuccessionPlan(
   },
 ): Promise<SuccessionPlan> {
   const db = getDB();
+
+  // Reject obviously invalid employee ids — they must be positive
+  // integers that match an EmpCloud user row (#26).
+  if (data.current_holder_id !== undefined && data.current_holder_id !== null) {
+    if (!Number.isInteger(data.current_holder_id) || data.current_holder_id <= 0) {
+      throw new ValidationError("current_holder_id must be a positive integer");
+    }
+  }
 
   const record: Record<string, any> = {
     id: uuidv4(),
