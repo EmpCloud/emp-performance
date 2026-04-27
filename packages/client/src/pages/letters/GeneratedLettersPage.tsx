@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   FileText,
@@ -9,6 +10,7 @@ import {
   Eye,
   X,
   Mail,
+  Settings,
 } from "lucide-react";
 import { apiGet, apiPost } from "@/api/client";
 import { cn, formatDate } from "@/lib/utils";
@@ -16,8 +18,13 @@ import type {
   GeneratedPerformanceLetter,
   PerformanceLetterTemplate,
   PaginatedResponse,
-  LetterType,
 } from "@emp-performance/shared";
+
+interface OrgUser {
+  id: number;
+  full_name: string;
+  email: string;
+}
 
 const TYPE_COLORS: Record<string, string> = {
   appraisal: "bg-blue-100 text-blue-700",
@@ -46,6 +53,13 @@ export function GeneratedLettersPage() {
   const [genEmployeeId, setGenEmployeeId] = useState("");
   const [genTemplateId, setGenTemplateId] = useState("");
   const [genCycleId, setGenCycleId] = useState("");
+  const [genTypeFilter, setGenTypeFilter] = useState("");
+
+  const { data: usersData } = useQuery({
+    queryKey: ["users", "list"],
+    queryFn: () => apiGet<OrgUser[]>("/users"),
+  });
+  const orgUsers: OrgUser[] = usersData?.data ?? [];
 
   const { data, isLoading } = useQuery({
     queryKey: ["generated-letters", page, filterType],
@@ -66,6 +80,13 @@ export function GeneratedLettersPage() {
   });
 
   const templates = templatesData?.data ?? [];
+
+  // When generating, narrow the template dropdown by letter type so the
+  // user picks a template that matches the letter they intend to send (#20).
+  const visibleTemplates = useMemo(() => {
+    if (!genTypeFilter) return templates;
+    return templates.filter((t) => t.type === genTypeFilter);
+  }, [templates, genTypeFilter]);
 
   const generateMutation = useMutation({
     mutationFn: (body: { employee_id: number; template_id: string; cycle_id?: string }) =>
@@ -106,13 +127,22 @@ export function GeneratedLettersPage() {
             View, download, and send performance letters.
           </p>
         </div>
-        <button
-          onClick={() => setShowGenerate(true)}
-          className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 transition-colors"
-        >
-          <Plus className="h-4 w-4" />
-          Generate Letter
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/letter-templates"
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            <Settings className="h-4 w-4" />
+            Manage Templates
+          </Link>
+          <button
+            onClick={() => setShowGenerate(true)}
+            className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 transition-colors"
+          >
+            <Plus className="h-4 w-4" />
+            Generate Letter
+          </button>
+        </div>
       </div>
 
       {/* Filter */}
@@ -151,35 +181,83 @@ export function GeneratedLettersPage() {
           >
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Employee ID
+                Employee <span className="text-red-500">*</span>
               </label>
-              <input
-                type="number"
+              <select
                 value={genEmployeeId}
                 onChange={(e) => setGenEmployeeId(e.target.value)}
                 required
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
-                placeholder="Enter employee ID"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Template
-              </label>
-              <select
-                value={genTemplateId}
-                onChange={(e) => setGenTemplateId(e.target.value)}
-                required
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
               >
-                <option value="">Select template...</option>
-                {templates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name} ({TYPE_LABELS[t.type] ?? t.type})
+                <option value="">— Select an employee —</option>
+                {orgUsers.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.full_name} ({u.email})
                   </option>
                 ))}
               </select>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Letter Type
+                </label>
+                <select
+                  value={genTypeFilter}
+                  onChange={(e) => {
+                    setGenTypeFilter(e.target.value);
+                    setGenTemplateId("");
+                  }}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                >
+                  <option value="">All types</option>
+                  {Object.entries(TYPE_LABELS).map(([key, label]) => (
+                    <option key={key} value={key}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Template <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={genTemplateId}
+                  onChange={(e) => setGenTemplateId(e.target.value)}
+                  required
+                  disabled={visibleTemplates.length === 0}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 disabled:bg-gray-50"
+                >
+                  <option value="">
+                    {visibleTemplates.length === 0
+                      ? genTypeFilter
+                        ? `No ${TYPE_LABELS[genTypeFilter] ?? genTypeFilter} templates yet`
+                        : "No templates yet"
+                      : "— Select a template —"}
+                  </option>
+                  {visibleTemplates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name} ({TYPE_LABELS[t.type] ?? t.type})
+                      {t.is_default ? " · default" : ""}
+                    </option>
+                  ))}
+                </select>
+                {visibleTemplates.length === 0 && (
+                  <p className="mt-1 text-xs text-gray-500">
+                    <Link
+                      to="/letter-templates"
+                      className="inline-flex items-center gap-1 text-brand-600 hover:text-brand-700"
+                    >
+                      <Settings className="h-3 w-3" />
+                      Manage templates
+                    </Link>{" "}
+                    to add one before generating.
+                  </p>
+                )}
+              </div>
             </div>
 
             <div>
