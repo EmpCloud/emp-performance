@@ -1,18 +1,23 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Link, useSearchParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Plus,
   Search,
   RefreshCw,
-  ChevronRight,
   Calendar,
   Users,
+  MoreVertical,
+  Pencil,
+  Trash2,
+  Eye,
+  PlayCircle,
+  CheckCircle2,
 } from "lucide-react";
-import { apiGet } from "@/api/client";
+import { apiGet, apiDelete, apiPost } from "@/api/client";
+import toast from "react-hot-toast";
 import type {
   ReviewCycle,
-  ReviewCycleStatus,
   PaginatedResponse,
 } from "@emp-performance/shared";
 import { formatDate } from "@/lib/utils";
@@ -46,18 +51,52 @@ type CycleWithCount = ReviewCycle & { participant_count: number };
 
 export function ReviewCycleListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [search, setSearch] = useState(searchParams.get("search") ?? "");
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [searchInput, setSearchInput] = useState(searchParams.get("search") ?? "");
+  const [debouncedSearch, setDebouncedSearch] = useState(searchInput);
   const page = Number(searchParams.get("page") ?? "1");
   const statusFilter = searchParams.get("status") ?? "";
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  // Debounce input -> URL/query so the search bar actually filters as the
+  // user types, not only on Enter (#13).
+  useEffect(() => {
+    const handle = setTimeout(() => setDebouncedSearch(searchInput.trim()), 300);
+    return () => clearTimeout(handle);
+  }, [searchInput]);
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+    const current = next.get("search") ?? "";
+    if (debouncedSearch === current) return;
+    if (debouncedSearch) next.set("search", debouncedSearch);
+    else next.delete("search");
+    next.delete("page");
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch]);
+
+  useEffect(() => {
+    if (!openMenuId) return;
+    function onClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpenMenuId(null);
+      }
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [openMenuId]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["review-cycles", { page, status: statusFilter, search }],
+    queryKey: ["review-cycles", { page, status: statusFilter, search: debouncedSearch }],
     queryFn: () =>
       apiGet<PaginatedResponse<CycleWithCount>>("/review-cycles", {
         page,
         perPage: 20,
         status: statusFilter || undefined,
-        search: search || undefined,
+        search: debouncedSearch || undefined,
       }),
   });
 
@@ -72,6 +111,40 @@ export function ReviewCycleListPage() {
     if (key !== "page") next.delete("page");
     setSearchParams(next);
   }
+
+  function refresh() {
+    queryClient.invalidateQueries({ queryKey: ["review-cycles"] });
+  }
+
+  const launchMutation = useMutation({
+    mutationFn: (id: string) => apiPost(`/review-cycles/${id}/launch`, {}),
+    onSuccess: () => {
+      toast.success("Cycle launched");
+      refresh();
+    },
+    onError: (err: any) =>
+      toast.error(err.response?.data?.error?.message || "Failed to launch cycle"),
+  });
+
+  const closeMutation = useMutation({
+    mutationFn: (id: string) => apiPost(`/review-cycles/${id}/close`, {}),
+    onSuccess: () => {
+      toast.success("Cycle closed");
+      refresh();
+    },
+    onError: (err: any) =>
+      toast.error(err.response?.data?.error?.message || "Failed to close cycle"),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiDelete(`/review-cycles/${id}`),
+    onSuccess: () => {
+      toast.success("Cycle deleted");
+      refresh();
+    },
+    onError: (err: any) =>
+      toast.error(err.response?.data?.error?.message || "Failed to delete cycle"),
+  });
 
   return (
     <div className="space-y-6">
@@ -114,10 +187,9 @@ export function ReviewCycleListPage() {
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
         <input
           type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && setFilter("search", search)}
-          placeholder="Search cycles..."
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="Search cycles by name or description..."
           className="w-full rounded-lg border border-gray-300 py-2.5 pl-10 pr-4 text-sm placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
         />
       </div>
@@ -203,13 +275,89 @@ export function ReviewCycleListPage() {
                       {cycle.participant_count}
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-right">
-                    <Link
-                      to={`/review-cycles/${cycle.id}`}
-                      className="text-gray-400 hover:text-gray-600"
+                  <td className="px-6 py-4 text-right relative">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenMenuId(openMenuId === cycle.id ? null : cycle.id);
+                      }}
+                      className="rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                      aria-label="Cycle actions"
                     >
-                      <ChevronRight className="h-5 w-5" />
-                    </Link>
+                      <MoreVertical className="h-5 w-5" />
+                    </button>
+
+                    {openMenuId === cycle.id && (
+                      <div
+                        ref={menuRef}
+                        className="absolute right-6 top-12 z-20 w-52 rounded-lg border border-gray-200 bg-white py-1 text-left shadow-lg"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpenMenuId(null);
+                            navigate(`/review-cycles/${cycle.id}`);
+                          }}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                        >
+                          <Eye className="h-4 w-4" />
+                          View details
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpenMenuId(null);
+                            navigate(`/review-cycles/${cycle.id}?edit=1`);
+                          }}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                        >
+                          <Pencil className="h-4 w-4" />
+                          Edit
+                        </button>
+                        {cycle.status === "draft" && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              launchMutation.mutate(cycle.id);
+                            }}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                          >
+                            <PlayCircle className="h-4 w-4 text-green-600" />
+                            Launch cycle
+                          </button>
+                        )}
+                        {cycle.status === "active" && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              closeMutation.mutate(cycle.id);
+                            }}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                          >
+                            <CheckCircle2 className="h-4 w-4 text-indigo-600" />
+                            Close cycle
+                          </button>
+                        )}
+                        {cycle.status === "draft" && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              if (window.confirm(`Delete cycle "${cycle.name}"? This cannot be undone.`)) {
+                                deleteMutation.mutate(cycle.id);
+                              }
+                            }}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}

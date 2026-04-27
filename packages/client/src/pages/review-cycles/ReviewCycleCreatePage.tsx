@@ -49,8 +49,16 @@ export function ReviewCycleCreatePage() {
     setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
   }
 
+  const dateError =
+    form.start_date && form.end_date && form.end_date < form.start_date
+      ? "End date cannot be before start date"
+      : form.start_date && form.review_deadline && form.review_deadline < form.start_date
+        ? "Review deadline cannot be before start date"
+        : null;
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (dateError) return;
     createMutation.mutate(form);
   }
 
@@ -133,11 +141,18 @@ export function ReviewCycleCreatePage() {
                 name="end_date"
                 value={form.end_date}
                 onChange={handleChange}
+                min={form.start_date || undefined}
                 required
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
               />
             </div>
           </div>
+
+          {dateError && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              {dateError}
+            </div>
+          )}
 
           {/* Review deadline */}
           <div>
@@ -149,6 +164,7 @@ export function ReviewCycleCreatePage() {
               name="review_deadline"
               value={form.review_deadline}
               onChange={handleChange}
+              min={form.start_date || undefined}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
             />
             <p className="mt-1 text-xs text-gray-500">
@@ -204,7 +220,7 @@ export function ReviewCycleCreatePage() {
         <div className="flex gap-3">
           <button
             type="submit"
-            disabled={createMutation.isPending}
+            disabled={createMutation.isPending || !!dateError}
             className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50 transition-colors"
           >
             <Save className="h-4 w-4" />

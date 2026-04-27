@@ -90,6 +90,22 @@ router.put(
   },
 );
 
+// DELETE /:id — delete a draft cycle
+router.delete(
+  "/:id",
+  authorize("super_admin", "org_admin", "hr_admin"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = idParamSchema.parse(req.params);
+      const orgId = req.user!.empcloudOrgId;
+      await cycleService.deleteCycle(orgId, id);
+      return sendSuccess(res, { message: "Cycle deleted" });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 // POST /:id/launch — launch cycle
 router.post(
   "/:id/launch",
