@@ -1,18 +1,34 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Send } from "lucide-react";
-import { apiPost } from "@/api/client";
+import { apiGet, apiPost } from "@/api/client";
+import { useAuthStore } from "@/lib/auth-store";
 import toast from "react-hot-toast";
+
+interface OrgUser {
+  id: number;
+  full_name: string;
+  email: string;
+}
 
 export function GiveFeedbackPage() {
   const navigate = useNavigate();
+  const currentUser = useAuthStore((s) => s.user);
   const [toUserId, setToUserId] = useState("");
   const [type, setType] = useState("kudos");
   const [visibility, setVisibility] = useState("public");
   const [message, setMessage] = useState("");
   const [tagsStr, setTagsStr] = useState("");
   const [isAnonymous, setIsAnonymous] = useState(false);
+
+  const { data: usersData } = useQuery({
+    queryKey: ["users", "list"],
+    queryFn: () => apiGet<OrgUser[]>("/users"),
+  });
+  const orgUsers: OrgUser[] = (usersData?.data ?? []).filter(
+    (u) => u.id !== currentUser?.empcloudUserId,
+  );
 
   const mutation = useMutation({
     mutationFn: (body: any) => apiPost("/feedback", body),
@@ -26,6 +42,10 @@ export function GiveFeedbackPage() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!toUserId) {
+      toast.error("Select a recipient");
+      return;
+    }
     mutation.mutate({
       to_user_id: parseInt(toUserId),
       type,
@@ -58,15 +78,20 @@ export function GiveFeedbackPage() {
         className="mt-6 max-w-xl rounded-xl border border-gray-200 bg-white p-6 shadow-sm space-y-4"
       >
         <div>
-          <label className="block text-sm font-medium text-gray-700">Recipient (User ID)</label>
-          <input
+          <label className="block text-sm font-medium text-gray-700">Recipient <span className="text-red-500">*</span></label>
+          <select
             value={toUserId}
             onChange={(e) => setToUserId(e.target.value)}
-            type="number"
             required
             className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
-            placeholder="Enter employee ID"
-          />
+          >
+            <option value="">— Select an employee —</option>
+            {orgUsers.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.full_name} ({u.email})
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="grid grid-cols-2 gap-4">

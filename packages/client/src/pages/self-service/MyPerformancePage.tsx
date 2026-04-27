@@ -15,8 +15,9 @@ export function MyPerformancePage() {
   const user = useAuthStore((s) => s.user);
 
   const { data: overviewData, isLoading, error: overviewError } = useQuery({
-    queryKey: ["analytics", "overview"],
-    queryFn: () => apiGet<any>("/analytics/overview"),
+    queryKey: ["analytics", "my-overview", user?.empcloudUserId],
+    queryFn: () => apiGet<any>("/analytics/my-overview"),
+    enabled: !!user,
     retry: 1,
   });
 
