@@ -81,6 +81,38 @@ export async function getOverview(orgId: number) {
   };
 }
 
+// Per-user overview for the My Performance page. Counts only the current
+// user's pending reviews, received feedback, and own goal completion —
+// org-wide values were misleading on a self-service screen (#7, #9).
+export async function getMyOverview(orgId: number, userId: number) {
+  const db = getDB();
+
+  const [pendingReviews, totalGoals, completedGoals, feedbackCount] = await Promise.all([
+    db.count("reviews", {
+      organization_id: orgId,
+      reviewer_id: userId,
+      status: "pending",
+    }),
+    db.count("goals", { organization_id: orgId, employee_id: userId }),
+    db.count("goals", {
+      organization_id: orgId,
+      employee_id: userId,
+      status: "completed",
+    }),
+    db.count("continuous_feedback", { organization_id: orgId, to_user_id: userId }),
+  ]);
+
+  const goalCompletionRate = totalGoals > 0 ? Math.round((completedGoals / totalGoals) * 100) : 0;
+
+  return {
+    pendingReviews,
+    goalCompletionRate,
+    feedbackCount,
+    totalGoals,
+    completedGoals,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Ratings Distribution (bell curve)
 // ---------------------------------------------------------------------------

@@ -24,6 +24,18 @@ router.get("/overview", async (req: Request, res: Response, next: NextFunction) 
   }
 });
 
+// GET /analytics/my-overview — current user's My Performance card values
+router.get("/my-overview", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const orgId = req.user!.empcloudOrgId;
+    const userId = req.user!.empcloudUserId;
+    const result = await analyticsService.getMyOverview(orgId, userId);
+    sendSuccess(res, result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /analytics/ratings-distribution?cycleId=xxx
 router.get("/ratings-distribution", async (req: Request, res: Response, next: NextFunction) => {
   try {
