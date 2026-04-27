@@ -62,4 +62,19 @@ router.get("/", async (req: Request, res: Response, next: NextFunction) => {
   }
 });
 
+// GET /users/departments — active departments in the caller's org
+router.get("/departments", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const orgId = req.user!.empcloudOrgId;
+    const db = getEmpCloudDB();
+    const rows = await db("organization_departments")
+      .where({ organization_id: orgId, is_deleted: false })
+      .select("id", "name")
+      .orderBy("name", "asc");
+    sendSuccess(res, rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
 export { router as usersRoutes };

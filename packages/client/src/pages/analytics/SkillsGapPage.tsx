@@ -252,14 +252,38 @@ function IndividualView({ employeeId }: { employeeId: string }) {
   );
 }
 
+interface OrgUser {
+  id: number;
+  full_name: string;
+  email: string;
+}
+
+interface OrgDepartment {
+  id: number;
+  name: string;
+}
+
 export function SkillsGapPage() {
   const [employeeId, setEmployeeId] = useState("");
   const [departmentId, setDepartmentId] = useState("");
   const [viewMode, setViewMode] = useState<"individual" | "department">("individual");
 
+  const { data: usersData } = useQuery({
+    queryKey: ["users", "list"],
+    queryFn: () => apiGet<OrgUser[]>("/users"),
+  });
+  const orgUsers: OrgUser[] = usersData?.data ?? [];
+
+  const { data: departmentsData } = useQuery({
+    queryKey: ["users", "departments"],
+    queryFn: () => apiGet<OrgDepartment[]>("/users/departments"),
+  });
+  const departments: OrgDepartment[] = departmentsData?.data ?? [];
+
   const { data: deptData, isLoading: deptLoading } = useQuery({
     queryKey: ["skills-gap-dept", departmentId],
-    queryFn: () => apiGet<any>(`/analytics/skills-gap/department/${departmentId}`),
+    queryFn: () =>
+      apiGet<any>(`/analytics/skills-gap/department/${encodeURIComponent(departmentId)}`),
     enabled: viewMode === "department" && !!departmentId,
   });
 
@@ -307,23 +331,33 @@ export function SkillsGapPage() {
 
         {viewMode === "individual" ? (
           <div className="flex items-center gap-2">
-            <input
-              type="number"
+            <select
               value={employeeId}
               onChange={(e) => setEmployeeId(e.target.value)}
-              placeholder="Employee ID"
-              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 w-40"
-            />
+              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 w-72"
+            >
+              <option value="">— Select an employee —</option>
+              {orgUsers.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.full_name} ({u.email})
+                </option>
+              ))}
+            </select>
           </div>
         ) : (
           <div className="flex items-center gap-2">
-            <input
-              type="text"
+            <select
               value={departmentId}
               onChange={(e) => setDepartmentId(e.target.value)}
-              placeholder="Department name"
-              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 w-48"
-            />
+              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 w-64"
+            >
+              <option value="">— Select a department —</option>
+              {departments.map((d) => (
+                <option key={d.id} value={d.name}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
           </div>
         )}
       </div>
@@ -337,7 +371,7 @@ export function SkillsGapPage() {
             <div className="rounded-lg border border-gray-200 bg-white p-12 text-center">
               <User className="mx-auto h-10 w-10 text-gray-300" />
               <p className="mt-2 text-sm text-gray-500">
-                Enter an employee ID to view their skills gap analysis.
+                Pick an employee to view their skills gap analysis.
               </p>
             </div>
           )
@@ -496,7 +530,7 @@ export function SkillsGapPage() {
           <div className="rounded-lg border border-gray-200 bg-white p-12 text-center">
             <Users className="mx-auto h-10 w-10 text-gray-300" />
             <p className="mt-2 text-sm text-gray-500">
-              Enter a department name to view aggregated skills gap analysis.
+              Pick a department to view its aggregated skills gap analysis.
             </p>
           </div>
         )}
