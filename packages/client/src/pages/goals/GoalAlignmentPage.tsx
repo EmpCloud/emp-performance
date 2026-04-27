@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Target, ChevronDown, ChevronRight, Loader2, GitBranch } from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2, GitBranch } from "lucide-react";
 import { apiGet } from "@/api/client";
 import { cn } from "@/lib/utils";
 import type { GoalTreeNode } from "@emp-performance/shared";
@@ -92,9 +92,16 @@ function GoalTreeNodeComponent({
       >
         {/* Expand/collapse button */}
         <button
-          onClick={() => hasChildren && onToggle(node.id)}
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (hasChildren) onToggle(node.id);
+          }}
+          disabled={!hasChildren}
+          aria-label={hasChildren ? (isExpanded ? "Collapse" : "Expand") : "No children"}
           className={cn(
-            "shrink-0 rounded p-0.5",
+            "shrink-0 rounded p-1",
             hasChildren
               ? "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
               : "text-transparent cursor-default",
@@ -188,6 +195,38 @@ export function GoalAlignmentPage() {
 
   const tree = data?.data ?? [];
 
+  // Pre-collect every node id that has children — used by both Expand All
+  // and the per-row toggle. Memoized so the buttons read stable data
+  // instead of recomputing the whole tree on each click (#15).
+  const expandableIds = useMemo(() => {
+    const ids: string[] = [];
+    function collect(nodes: GoalTreeNode[]) {
+      for (const n of nodes) {
+        const ch = n.children ?? [];
+        if (ch.length > 0) {
+          ids.push(n.id);
+          collect(ch);
+        }
+      }
+    }
+    collect(tree);
+    return ids;
+  }, [tree]);
+
+  // Auto-expand the first level on initial load so the page doesn't look
+  // collapsed when the user lands on it.
+  useEffect(() => {
+    if (tree.length === 0) return;
+    setExpandedIds((prev) => {
+      if (prev.size > 0) return prev;
+      const next = new Set<string>();
+      for (const root of tree) {
+        if ((root.children ?? []).length > 0) next.add(root.id);
+      }
+      return next;
+    });
+  }, [tree]);
+
   const toggleExpand = (id: string) => {
     setExpandedIds((prev) => {
       const next = new Set(prev);
@@ -198,23 +237,15 @@ export function GoalAlignmentPage() {
   };
 
   const expandAll = () => {
-    const allIds = new Set<string>();
-    function collect(nodes: GoalTreeNode[]) {
-      for (const n of nodes) {
-        const ch = n.children ?? [];
-        if (ch.length > 0) {
-          allIds.add(n.id);
-          collect(ch);
-        }
-      }
-    }
-    collect(tree);
-    setExpandedIds(allIds);
+    setExpandedIds(new Set(expandableIds));
   };
 
   const collapseAll = () => {
     setExpandedIds(new Set());
   };
+
+  const allExpanded =
+    expandableIds.length > 0 && expandableIds.every((id) => expandedIds.has(id));
 
   return (
     <div>
@@ -227,14 +258,18 @@ export function GoalAlignmentPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={expandAll}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            disabled={expandableIds.length === 0 || allExpanded}
+            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Expand All
           </button>
           <button
+            type="button"
             onClick={collapseAll}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            disabled={expandedIds.size === 0}
+            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Collapse All
           </button>

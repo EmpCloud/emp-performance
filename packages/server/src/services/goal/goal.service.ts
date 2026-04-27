@@ -115,6 +115,57 @@ export async function listGoals(
   if (params.category) filters.category = params.category;
   if (params.status) filters.status = params.status;
 
+  const search = (params.search ?? "").trim();
+
+  if (search) {
+    // findMany has no LIKE support, so issue a raw query for free-text
+    // search on title/description (#14).
+    const offset = (page - 1) * perPage;
+    const where: string[] = ["organization_id = ?"];
+    const args: any[] = [orgId];
+    if (params.employeeId) {
+      where.push("employee_id = ?");
+      args.push(params.employeeId);
+    }
+    if (params.cycleId) {
+      where.push("cycle_id = ?");
+      args.push(params.cycleId);
+    }
+    if (params.category) {
+      where.push("category = ?");
+      args.push(params.category);
+    }
+    if (params.status) {
+      where.push("status = ?");
+      args.push(params.status);
+    }
+    where.push("(title LIKE ? OR description LIKE ?)");
+    const term = `%${search}%`;
+    args.push(term, term);
+
+    const orderField = params.sort ?? "created_at";
+    const orderDir = (params.order ?? "desc").toUpperCase() === "ASC" ? "ASC" : "DESC";
+
+    const rowsRes = await db.raw<any>(
+      `SELECT * FROM goals WHERE ${where.join(" AND ")} ORDER BY ${orderField} ${orderDir} LIMIT ? OFFSET ?`,
+      [...args, perPage, offset],
+    );
+    const totalRes = await db.raw<any>(
+      `SELECT COUNT(*) AS c FROM goals WHERE ${where.join(" AND ")}`,
+      args,
+    );
+    const rows = (Array.isArray(rowsRes) ? rowsRes[0] || rowsRes : []) as any[];
+    const totalRows = (Array.isArray(totalRes) ? totalRes[0] || totalRes : []) as any[];
+    const total = Number(totalRows?.[0]?.c ?? 0);
+    return {
+      data: rows as Goal[],
+      total,
+      page,
+      perPage,
+      totalPages: Math.max(1, Math.ceil(total / perPage)),
+    };
+  }
+
   const result = await db.findMany<Goal>("goals", {
     page,
     limit: perPage,
