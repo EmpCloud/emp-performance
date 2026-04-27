@@ -30,6 +30,7 @@ import { notificationRoutes } from "./api/routes/notification.routes";
 import { letterRoutes } from "./api/routes/letter.routes";
 import { aiSummaryRoutes } from "./api/routes/ai-summary.routes";
 import { managerEffectivenessRoutes } from "./api/routes/manager-effectiveness.routes";
+import { usersRoutes } from "./api/routes/users.routes";
 import { authenticate, authorize } from "./api/middleware/auth.middleware";
 import { errorHandler } from "./api/middleware/error.middleware";
 import { apiLimiter, authLimiter } from "./api/middleware/rate-limit.middleware";
@@ -106,6 +107,7 @@ v1.use("/notifications", notificationRoutes);
 v1.use("/letters", letterRoutes);
 v1.use("/ai-summary", aiSummaryRoutes);
 v1.use("/manager-effectiveness", managerEffectivenessRoutes);
+v1.use("/users", usersRoutes);
 
 // ---------------------------------------------------------------------------
 // Alias routes for client compatibility (#870–#874)
