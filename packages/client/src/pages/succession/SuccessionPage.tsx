@@ -142,8 +142,20 @@ export function SuccessionPage() {
                 </label>
                 <input
                   type="number"
+                  min={1}
+                  step={1}
                   value={form.current_holder_id}
-                  onChange={(e) => setForm({ ...form, current_holder_id: e.target.value })}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "" || /^\d+$/.test(v)) {
+                      setForm({ ...form, current_holder_id: v });
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "-" || e.key === "e" || e.key === "+") {
+                      e.preventDefault();
+                    }
+                  }}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
                   placeholder="Employee ID (optional)"
                 />

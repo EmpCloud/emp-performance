@@ -262,8 +262,12 @@ function NotificationSettingsPanel() {
     try {
       await apiPost("/notifications/send-test-email");
       toast.success("Test email sent. Check your inbox.");
-    } catch {
-      toast.error("Failed to send test email. Check SMTP configuration.");
+    } catch (err: any) {
+      const detail =
+        err?.response?.data?.error?.message ||
+        err?.message ||
+        "Check SMTP configuration.";
+      toast.error(`Failed to send test email — ${detail}`);
     } finally {
       setSendingTest(false);
     }
