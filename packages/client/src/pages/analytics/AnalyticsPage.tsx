@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import {
   BarChart3,
   Target,
-  TrendingUp,
   AlertTriangle,
   RefreshCw,
   Loader2,
+  ArrowUpRight,
 } from "lucide-react";
 import {
   BarChart,
@@ -63,18 +64,14 @@ export function AnalyticsPage() {
     { rating: "5", count: 5 },
   ];
 
-  // Pie data from goals
-  const pieData = goals.length > 0
-    ? goals.map((g: any) => ({
-        name: g.category || "Other",
-        value: Number(g.total) || 0,
-        completed: Number(g.completed) || 0,
-      }))
-    : [
-        { name: "Individual", value: 40, completed: 28 },
-        { name: "Team", value: 25, completed: 15 },
-        { name: "Organization", value: 10, completed: 5 },
-      ];
+  // Real goal-completion data, grouped by category. Drop the dummy
+  // fallback — it gave the misleading impression there were goals when
+  // the org actually had none (#22).
+  const pieData = goals.map((g: any) => ({
+    name: (g.category || "Other").replace(/_/g, " "),
+    value: Number(g.total) || 0,
+    completed: Number(g.completed) || 0,
+  }));
 
   // Trends line data
   const lineData = trends.length > 0
@@ -91,10 +88,34 @@ export function AnalyticsPage() {
       ];
 
   const statCards = [
-    { label: "Active Cycles", value: overview?.activeCycles ?? 0, icon: RefreshCw, color: "text-blue-600 bg-blue-50" },
-    { label: "Pending Reviews", value: overview?.pendingReviews ?? 0, icon: BarChart3, color: "text-amber-600 bg-amber-50" },
-    { label: "Goal Completion", value: `${overview?.goalCompletionRate ?? 0}%`, icon: Target, color: "text-green-600 bg-green-50" },
-    { label: "Active PIPs", value: overview?.pipCount ?? 0, icon: AlertTriangle, color: "text-red-600 bg-red-50" },
+    {
+      label: "Active Cycles",
+      value: overview?.activeCycles ?? 0,
+      icon: RefreshCw,
+      color: "text-blue-600 bg-blue-50",
+      to: "/review-cycles?status=active",
+    },
+    {
+      label: "Pending Reviews",
+      value: overview?.pendingReviews ?? 0,
+      icon: BarChart3,
+      color: "text-amber-600 bg-amber-50",
+      to: "/reviews",
+    },
+    {
+      label: "Goal Completion",
+      value: `${overview?.goalCompletionRate ?? 0}%`,
+      icon: Target,
+      color: "text-green-600 bg-green-50",
+      to: "/goals",
+    },
+    {
+      label: "Active PIPs",
+      value: overview?.pipCount ?? 0,
+      icon: AlertTriangle,
+      color: "text-red-600 bg-red-50",
+      to: "/pips",
+    },
   ];
 
   return (
@@ -112,17 +133,24 @@ export function AnalyticsPage() {
           {statCards.map((card) => {
             const Icon = card.icon;
             return (
-              <div key={card.label} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-                <div className="flex items-center gap-3">
-                  <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${card.color}`}>
-                    <Icon className="h-5 w-5" />
+              <Link
+                key={card.label}
+                to={card.to}
+                className="group rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md hover:border-brand-300"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${card.color}`}>
+                      <Icon className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-500">{card.label}</p>
+                      <p className="text-2xl font-bold text-gray-900">{card.value}</p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-sm font-medium text-gray-500">{card.label}</p>
-                    <p className="text-2xl font-bold text-gray-900">{card.value}</p>
-                  </div>
+                  <ArrowUpRight className="h-4 w-4 text-gray-300 group-hover:text-brand-500" />
                 </div>
-              </div>
+              </Link>
             );
           })}
         </div>
@@ -151,26 +179,61 @@ export function AnalyticsPage() {
         <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <h2 className="text-lg font-semibold text-gray-900">Goal Completion</h2>
           <p className="mt-1 text-sm text-gray-500">Completion by category</p>
-          <div className="mt-4 h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={pieData}
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={90}
-                  dataKey="value"
-                  nameKey="name"
-                  label={({ name, value }) => `${name}: ${value}`}
-                >
-                  {pieData.map((_: any, idx: number) => (
-                    <Cell key={idx} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
+          {pieData.length === 0 ? (
+            <div className="mt-4 flex h-64 flex-col items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50 text-center">
+              <Target className="h-8 w-8 text-gray-300" />
+              <p className="mt-2 text-sm text-gray-500">No goal data yet</p>
+              <Link to="/goals/new" className="mt-1 text-xs font-medium text-brand-600 hover:text-brand-700">
+                Create the first goal
+              </Link>
+            </div>
+          ) : (
+            <>
+              <div className="mt-4 h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={pieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={50}
+                      outerRadius={85}
+                      paddingAngle={2}
+                      dataKey="value"
+                      nameKey="name"
+                    >
+                      {pieData.map((_: any, idx: number) => (
+                        <Cell key={idx} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      formatter={(value: number, _name: string, props: any) => {
+                        const total = Number(props?.payload?.value) || 0;
+                        const done = Number(props?.payload?.completed) || 0;
+                        const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+                        return [`${done}/${total} (${pct}%)`, props?.payload?.name];
+                      }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <ul className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {pieData.map((d: any, idx: number) => {
+                  const pct = d.value > 0 ? Math.round((d.completed / d.value) * 100) : 0;
+                  return (
+                    <li key={d.name} className="flex items-center gap-2 text-xs text-gray-600">
+                      <span
+                        className="inline-block h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: PIE_COLORS[idx % PIE_COLORS.length] }}
+                      />
+                      <span className="capitalize font-medium text-gray-900">{d.name}</span>
+                      <span className="text-gray-400">— {d.completed}/{d.value} ({pct}%)</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
         </div>
 
         {/* Trends - Line Chart (full width) */}
