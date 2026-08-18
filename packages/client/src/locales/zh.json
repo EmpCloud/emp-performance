@@ -342,6 +342,9 @@
     "testEmailConfiguration": "测试邮件配置", "testEmailHelp": "向您的地址发送测试邮件，以验证 SMTP 设置。", "sendTestEmail": "发送测试邮件", "saveNotificationSettings": "保存通知设置",
     "notificationSaveSuccess": "通知设置已保存", "notificationSaveError": "无法保存通知设置", "testEmailSuccess": "测试邮件已发送，请检查收件箱。", "checkSmtp": "请检查 SMTP 配置。", "testEmailError": "无法发送测试邮件 — {{detail}}"
   },
+  "competencyFrameworks": {"title":"能力框架","subtitle":"管理能力框架及其能力项。","createFramework":"创建框架","searchPlaceholder":"搜索框架...","allStatuses":"所有状态","active":"启用","inactive":"停用","newestFirst":"最新优先","oldestFirst":"最早优先","nameAsc":"名称 A–Z","nameDesc":"名称 Z–A","emptyTitle":"未找到框架","emptyDescription":"创建您的第一个能力框架以定义评估标准。","createdDate":"创建于 {{date}}"},
+  "goalAlignment": {"title":"目标对齐","subtitle":"可视化目标如何从公司逐级分解到个人层面。","expandAll":"全部展开","collapseAll":"全部折叠","expand":"展开","collapse":"折叠","noChildren":"无子项","allCycles":"所有周期","allOwners":"所有负责人","allStatuses":"所有状态","clearFilters":"清除筛选","categories":"类别","statusLabel":"状态","employeeNumber":"员工 #{{id}}","ownProgressVsRollup":"自身进度与汇总进度","ownProgress":"(自身: {{progress}}%)","loadError":"无法加载目标对齐树。","emptyTitle":"未找到目标。创建具有父级关系的目标以查看对齐树。","category":{"company":"公司","department":"部门","team":"团队","individual":"个人"},"status":{"not_started":"未开始","in_progress":"进行中","at_risk":"有风险","completed":"已完成","cancelled":"已取消"}},
+  "goalList": {"title":"目标","subtitle":"通过关键结果跟踪个人和团队目标。","createGoal":"创建目标","searchPlaceholder":"搜索目标...","allCategories":"所有类别","dueDate":"截止日期 {{date}}","keyResults":"关键结果","loading":"正在加载目标...","loadError":"无法加载目标。","emptyTitle":"未找到目标。创建您的第一个目标以开始。","sort":{"newestFirst":"最新优先","oldestFirst":"最早优先","titleAsc":"标题 A–Z","titleDesc":"标题 Z–A","progressDesc":"进度由高到低","progressAsc":"进度由低到高","dueDateSoonest":"截止日期最近","priorityDesc":"优先级由高到低"}},
   "succession": {
       "title":  "继任规划",
       "subtitle":  "为关键职位识别和培养未来领导者。",
