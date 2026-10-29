@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronRight, Loader2, GitBranch } from "lucide-react";
@@ -22,21 +23,6 @@ const STATUS_BADGE_COLORS: Record<string, string> = {
   at_risk: "bg-red-100 text-red-700",
   completed: "bg-green-100 text-green-700",
   cancelled: "bg-gray-100 text-gray-500",
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  not_started: "Not Started",
-  in_progress: "In Progress",
-  at_risk: "At Risk",
-  completed: "Completed",
-  cancelled: "Cancelled",
-};
-
-const CATEGORY_LABELS: Record<string, string> = {
-  company: "Company",
-  department: "Department",
-  team: "Team",
-  individual: "Individual",
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -79,6 +65,7 @@ function GoalTreeNodeComponent({
   onToggle: (id: string) => void;
   onNavigate: (id: string) => void;
 }) {
+  const { t } = useTranslation();
   const isExpanded = expandedIds.has(node.id);
   const children = node.children ?? [];
   const hasChildren = children.length > 0;
@@ -101,7 +88,13 @@ function GoalTreeNodeComponent({
             if (hasChildren) onToggle(node.id);
           }}
           disabled={!hasChildren}
-          aria-label={hasChildren ? (isExpanded ? "Collapse" : "Expand") : "No children"}
+          aria-label={
+            hasChildren
+              ? isExpanded
+                ? t("goalAlignment.collapse")
+                : t("goalAlignment.expand")
+              : t("goalAlignment.noChildren")
+          }
           className={cn(
             "shrink-0 rounded p-1",
             hasChildren
@@ -126,13 +119,13 @@ function GoalTreeNodeComponent({
               {node.title}
             </button>
             <StatusBadge colorClass={STATUS_BADGE_COLORS[node.status] ?? "bg-gray-100 text-gray-700"}>
-              {STATUS_LABELS[node.status] ?? node.status}
+              {t(`goalAlignment.status.${node.status}`, { defaultValue: node.status })}
             </StatusBadge>
             <span className="text-xs text-gray-400">
-              {CATEGORY_LABELS[node.category] ?? node.category}
+              {t(`goalAlignment.category.${node.category}`, { defaultValue: node.category })}
             </span>
             <span className="text-xs text-gray-400">
-              Employee #{node.employee_id}
+              {t("goalAlignment.employeeNumber", { id: node.employee_id })}
             </span>
           </div>
 
@@ -144,8 +137,8 @@ function GoalTreeNodeComponent({
               {node.rollup_progress ?? node.progress ?? 0}%
             </span>
             {hasChildren && (node.rollup_progress ?? node.progress) !== node.progress && (
-              <span className="text-xs text-gray-400" title="Own progress vs rollup">
-                (own: {node.progress}%)
+              <span className="text-xs text-gray-400" title={t("goalAlignment.ownProgressVsRollup")}>
+                {t("goalAlignment.ownProgress", { progress: node.progress })}
               </span>
             )}
           </div>
@@ -157,7 +150,7 @@ function GoalTreeNodeComponent({
             "h-3 w-3 shrink-0 rounded-full",
             STATUS_COLORS[node.status] ?? "bg-gray-400",
           )}
-          title={STATUS_LABELS[node.status] ?? node.status}
+          title={t(`goalAlignment.status.${node.status}`, { defaultValue: node.status })}
         />
       </div>
 
@@ -213,6 +206,7 @@ function filterTree(
 }
 
 export function GoalAlignmentPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [cycleId, setCycleId] = useState("");
   const [ownerId, setOwnerId] = useState("");
@@ -299,9 +293,9 @@ export function GoalAlignmentPage() {
     <div>
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Goal Alignment</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t("goalAlignment.title")}</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Visualize how goals cascade from company to individual level.
+            {t("goalAlignment.subtitle")}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -311,7 +305,7 @@ export function GoalAlignmentPage() {
             disabled={expandableIds.length === 0 || allExpanded}
             className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Expand All
+            {t("goalAlignment.expandAll")}
           </button>
           <button
             type="button"
@@ -319,7 +313,7 @@ export function GoalAlignmentPage() {
             disabled={expandedIds.size === 0}
             className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Collapse All
+            {t("goalAlignment.collapseAll")}
           </button>
         </div>
       </div>
@@ -331,7 +325,7 @@ export function GoalAlignmentPage() {
           onChange={(e) => setCycleId(e.target.value)}
           className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
         >
-          <option value="">All Cycles</option>
+          <option value="">{t("goalAlignment.allCycles")}</option>
           {cycles.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
@@ -344,7 +338,7 @@ export function GoalAlignmentPage() {
           onChange={(e) => setOwnerId(e.target.value)}
           className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
         >
-          <option value="">All Owners</option>
+          <option value="">{t("goalAlignment.allOwners")}</option>
           {owners.map((u) => (
             <option key={u.id} value={u.id}>
               {u.full_name}
@@ -357,11 +351,11 @@ export function GoalAlignmentPage() {
           onChange={(e) => setStatusFilter(e.target.value)}
           className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
         >
-          <option value="">All Statuses</option>
-          <option value="not_started">Not Started</option>
-          <option value="in_progress">In Progress</option>
-          <option value="at_risk">At Risk</option>
-          <option value="completed">Completed</option>
+          <option value="">{t("goalAlignment.allStatuses")}</option>
+          <option value="not_started">{t("goalAlignment.status.not_started")}</option>
+          <option value="in_progress">{t("goalAlignment.status.in_progress")}</option>
+          <option value="at_risk">{t("goalAlignment.status.at_risk")}</option>
+          <option value="completed">{t("goalAlignment.status.completed")}</option>
         </select>
 
         {(cycleId || ownerId || statusFilter) && (
@@ -374,14 +368,14 @@ export function GoalAlignmentPage() {
             }}
             className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
-            Clear filters
+            {t("goalAlignment.clearFilters")}
           </button>
         )}
       </div>
 
       {/* Legend */}
       <div className="mt-4 flex flex-wrap items-center gap-4 rounded-lg border border-gray-200 bg-white p-3">
-        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Categories:</span>
+        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">{t("goalAlignment.categories")}:</span>
         {(["company", "department", "team", "individual"] as const).map((cat) => (
           <div key={cat} className="flex items-center gap-1.5">
             <div
@@ -392,15 +386,15 @@ export function GoalAlignmentPage() {
                 "bg-blue-500": cat === "individual",
               })}
             />
-            <span className="text-xs text-gray-600">{CATEGORY_LABELS[cat]}</span>
+            <span className="text-xs text-gray-600">{t(`goalAlignment.category.${cat}`)}</span>
           </div>
         ))}
         <span className="mx-2 text-gray-300">|</span>
-        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Status:</span>
+        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">{t("goalAlignment.statusLabel")}:</span>
         {(["completed", "in_progress", "at_risk", "not_started"] as const).map((s) => (
           <div key={s} className="flex items-center gap-1.5">
             <div className={cn("h-2.5 w-2.5 rounded-full", STATUS_COLORS[s])} />
-            <span className="text-xs text-gray-600">{STATUS_LABELS[s]}</span>
+            <span className="text-xs text-gray-600">{t(`goalAlignment.status.${s}`)}</span>
           </div>
         ))}
       </div>
@@ -415,14 +409,14 @@ export function GoalAlignmentPage() {
 
         {error && (
           <div className="rounded-lg border border-red-200 bg-red-50 p-6 text-center">
-            <p className="text-sm text-red-600">Failed to load goal alignment tree.</p>
+            <p className="text-sm text-red-600">{t("goalAlignment.loadError")}</p>
           </div>
         )}
 
         {!isLoading && tree.length === 0 && (
           <EmptyState
             icon={GitBranch}
-            title="No goals found. Create goals with parent relationships to see the alignment tree."
+            title={t("goalAlignment.emptyTitle")}
             className=""
           />
         )}

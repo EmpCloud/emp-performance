@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
@@ -30,21 +31,6 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: "bg-red-100 text-red-700",
 };
 
-const CATEGORY_LABELS: Record<string, string> = {
-  individual: "Individual",
-  team: "Team",
-  department: "Department",
-  company: "Company",
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  not_started: "Not Started",
-  in_progress: "In Progress",
-  at_risk: "At Risk",
-  completed: "Completed",
-  cancelled: "Cancelled",
-};
-
 interface GoalWithKRs extends Goal {
   key_results?: KeyResult[];
 }
@@ -70,6 +56,7 @@ function ProgressBar({ value, className }: { value: number; className?: string }
 }
 
 function GoalCard({ goal, expanded, onToggle }: { goal: GoalWithKRs; expanded: boolean; onToggle: () => void }) {
+  const { t } = useTranslation();
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4 hover:shadow-sm transition-shadow">
       <div className="flex items-start gap-3">
@@ -93,10 +80,10 @@ function GoalCard({ goal, expanded, onToggle }: { goal: GoalWithKRs; expanded: b
               {goal.title}
             </Link>
             <StatusBadge colorClass={STATUS_COLORS[goal.status] ?? "bg-gray-100 text-gray-700"}>
-              {STATUS_LABELS[goal.status] ?? goal.status}
+              {t(`goalAlignment.status.${goal.status}`, { defaultValue: goal.status })}
             </StatusBadge>
             <span className="text-xs text-gray-500">
-              {CATEGORY_LABELS[goal.category] ?? goal.category}
+              {t(`goalAlignment.category.${goal.category}`, { defaultValue: goal.category })}
             </span>
           </div>
 
@@ -115,7 +102,7 @@ function GoalCard({ goal, expanded, onToggle }: { goal: GoalWithKRs; expanded: b
             </span>
             {goal.due_date && (
               <span className="text-xs text-gray-400">
-                Due {formatDate(goal.due_date)}
+                {t("goalList.dueDate", { date: formatDate(goal.due_date) })}
               </span>
             )}
           </div>
@@ -123,7 +110,7 @@ function GoalCard({ goal, expanded, onToggle }: { goal: GoalWithKRs; expanded: b
           {expanded && goal.key_results && goal.key_results.length > 0 && (
             <div className="mt-3 space-y-2 border-t border-gray-100 pt-3">
               <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Key Results
+                {t("goalList.keyResults")}
               </p>
               {goal.key_results.map((kr) => {
                 const krProgress =
@@ -151,18 +138,18 @@ function GoalCard({ goal, expanded, onToggle }: { goal: GoalWithKRs; expanded: b
   );
 }
 
-const SORT_OPTIONS: { value: string; label: string }[] = [
-  { value: "created_at:desc", label: "Newest first" },
-  { value: "created_at:asc", label: "Oldest first" },
-  { value: "title:asc", label: "Title A–Z" },
-  { value: "title:desc", label: "Title Z–A" },
-  { value: "progress:desc", label: "Progress high–low" },
-  { value: "progress:asc", label: "Progress low–high" },
-  { value: "due_date:asc", label: "Due date (soonest)" },
-  { value: "priority:desc", label: "Priority high–low" },
-];
-
 export function GoalListPage() {
+  const { t } = useTranslation();
+  const sortOptions = [
+    { value: "created_at:desc", label: t("goalList.sort.newestFirst") },
+    { value: "created_at:asc", label: t("goalList.sort.oldestFirst") },
+    { value: "title:asc", label: t("goalList.sort.titleAsc") },
+    { value: "title:desc", label: t("goalList.sort.titleDesc") },
+    { value: "progress:desc", label: t("goalList.sort.progressDesc") },
+    { value: "progress:asc", label: t("goalList.sort.progressAsc") },
+    { value: "due_date:asc", label: t("goalList.sort.dueDateSoonest") },
+    { value: "priority:desc", label: t("goalList.sort.priorityDesc") },
+  ];
   const [page, setPage] = useState(1);
   const [category, setCategory] = useState("");
   const [status, setStatus] = useState("");
@@ -202,9 +189,9 @@ export function GoalListPage() {
     <div>
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Goals</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t("goalList.title")}</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Track individual and team goals with key results.
+            {t("goalList.subtitle")}
           </p>
         </div>
         <Link
@@ -212,7 +199,7 @@ export function GoalListPage() {
           className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 transition-colors"
         >
           <Plus className="h-4 w-4" />
-          Create Goal
+          {t("goalList.createGoal")}
         </Link>
       </div>
 
@@ -222,7 +209,7 @@ export function GoalListPage() {
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
           <input
             type="text"
-            placeholder="Search goals..."
+            placeholder={t("goalList.searchPlaceholder")}
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
@@ -240,11 +227,11 @@ export function GoalListPage() {
           }}
           className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
         >
-          <option value="">All Categories</option>
-          <option value="individual">Individual</option>
-          <option value="team">Team</option>
-          <option value="department">Department</option>
-          <option value="company">Company</option>
+          <option value="">{t("goalList.allCategories")}</option>
+          <option value="individual">{t("goalAlignment.category.individual")}</option>
+          <option value="team">{t("goalAlignment.category.team")}</option>
+          <option value="department">{t("goalAlignment.category.department")}</option>
+          <option value="company">{t("goalAlignment.category.company")}</option>
         </select>
 
         <select
@@ -255,12 +242,12 @@ export function GoalListPage() {
           }}
           className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
         >
-          <option value="">All Statuses</option>
-          <option value="not_started">Not Started</option>
-          <option value="in_progress">In Progress</option>
-          <option value="at_risk">At Risk</option>
-          <option value="completed">Completed</option>
-          <option value="cancelled">Cancelled</option>
+          <option value="">{t("goalAlignment.allStatuses")}</option>
+          <option value="not_started">{t("goalAlignment.status.not_started")}</option>
+          <option value="in_progress">{t("goalAlignment.status.in_progress")}</option>
+          <option value="at_risk">{t("goalAlignment.status.at_risk")}</option>
+          <option value="completed">{t("goalAlignment.status.completed")}</option>
+          <option value="cancelled">{t("goalAlignment.status.cancelled")}</option>
         </select>
 
         <select
@@ -271,7 +258,7 @@ export function GoalListPage() {
           }}
           className="ml-auto rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
         >
-          {SORT_OPTIONS.map((o) => (
+          {sortOptions.map((o) => (
             <option key={o.value} value={o.value}>
               {o.label}
             </option>
@@ -283,20 +270,20 @@ export function GoalListPage() {
       <div className="mt-6 space-y-3">
         {isLoading && (
           <div className="rounded-lg border border-gray-200 bg-white p-12 text-center">
-            <p className="text-sm text-gray-500">Loading goals...</p>
+            <p className="text-sm text-gray-500">{t("goalList.loading")}</p>
           </div>
         )}
 
         {error && (
           <div className="rounded-lg border border-red-200 bg-red-50 p-6 text-center">
-            <p className="text-sm text-red-600">Failed to load goals.</p>
+            <p className="text-sm text-red-600">{t("goalList.loadError")}</p>
           </div>
         )}
 
         {!isLoading && goals.length === 0 && (
           <EmptyState
             icon={Target}
-            title="No goals found. Create your first goal to get started."
+            title={t("goalList.emptyTitle")}
             className=""
           />
         )}
