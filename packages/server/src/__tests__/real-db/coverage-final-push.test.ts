@@ -3,10 +3,19 @@
 // =============================================================================
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import knexLib, { Knex } from "knex";
+import type { ActorContext } from "../../security/actor-context";
 
 let db: Knex;
 const ORG = 5;
 const USER = 522;
+const REVIEWER_ACTOR: ActorContext = {
+  userId: USER,
+  employeeId: USER,
+  organizationId: ORG,
+  role: "employee",
+  roles: ["employee"],
+  authenticationMethod: "jwt",
+};
 let dbAvailable = false;
 
 beforeAll(async () => {
@@ -106,8 +115,8 @@ describe.skipIf(!dbAvailable)("PIP service coverage", () => {
 describe.skipIf(!dbAvailable)("Review service coverage", () => {
   it("listReviews", async () => { const { listReviews } = await import("../../services/review/review.service"); expect(await listReviews(ORG, {})).toBeTruthy(); });
   it("getReview throws for non-existent", async () => { const { getReview } = await import("../../services/review/review.service"); await expect(getReview(ORG, "non-existent")).rejects.toThrow(); });
-  it("submitReview throws for non-existent", async () => { const { submitReview } = await import("../../services/review/review.service"); await expect(submitReview(ORG, "non-existent")).rejects.toThrow(); });
-  it("saveDraft throws for non-existent", async () => { const { saveDraft } = await import("../../services/review/review.service"); await expect(saveDraft(ORG, "non-existent", {} as any)).rejects.toThrow(); });
+  it("submitReview throws for non-existent", async () => { const { submitReview } = await import("../../services/review/review.service"); await expect(submitReview(ORG, "non-existent", { overall_rating: 4, summary: "Summary" }, REVIEWER_ACTOR)).rejects.toThrow(); });
+  it("saveDraft throws for non-existent", async () => { const { saveDraft } = await import("../../services/review/review.service"); await expect(saveDraft(ORG, "non-existent", {} as any, REVIEWER_ACTOR)).rejects.toThrow(); });
   it("getReviewsForParticipant", async () => { const { getReviewsForParticipant } = await import("../../services/review/review.service"); expect(await getReviewsForParticipant(ORG, USER)).toBeTruthy(); });
 });
 

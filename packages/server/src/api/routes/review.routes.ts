@@ -11,6 +11,7 @@ import {
   paginationSchema,
 } from "@emp-performance/shared";
 import * as reviewService from "../../services/review/review.service";
+import { canReadAllReviews } from "../../security/policies/review.policy";
 
 const router = Router();
 
@@ -22,7 +23,7 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = createReviewSchema.parse(req.body);
     const orgId = req.user!.empcloudOrgId;
-    const review = await reviewService.createReview(orgId, data);
+    const review = await reviewService.createReview(orgId, data, req.actor!);
     return sendSuccess(res, review, 201);
   } catch (err: any) {
     if (err.name === "ZodError") {
@@ -35,13 +36,11 @@ router.post("/", async (req: Request, res: Response, next: NextFunction) => {
 // GET / — list reviews (filter by cycle, reviewer, reviewee, type, status)
 // Roles that may read any review in the org (HR/admin). Everyone else is
 // scoped to reviews they authored or are the subject of (audit H2).
-const REVIEW_ADMIN_ROLES = ["super_admin", "org_admin", "hr_admin", "hr_manager"];
-
 router.get("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const query = paginationSchema.parse(req.query);
     const orgId = req.user!.empcloudOrgId;
-    const isAdmin = REVIEW_ADMIN_ROLES.includes(req.user!.role);
+    const isAdmin = canReadAllReviews(req.actor!);
 
     const result = await reviewService.listReviews(orgId, {
       page: query.page,
@@ -68,7 +67,7 @@ router.get("/:id", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = idParamSchema.parse(req.params);
     const orgId = req.user!.empcloudOrgId;
-    const isAdmin = REVIEW_ADMIN_ROLES.includes(req.user!.role);
+    const isAdmin = canReadAllReviews(req.actor!);
     const review = await reviewService.getReview(
       orgId,
       id,
@@ -86,7 +85,7 @@ router.put("/:id", async (req: Request, res: Response, next: NextFunction) => {
     const { id } = idParamSchema.parse(req.params);
     const orgId = req.user!.empcloudOrgId;
     const data = submitReviewSchema.partial().parse(req.body);
-    const review = await reviewService.saveDraft(orgId, id, data);
+    const review = await reviewService.saveDraft(orgId, id, data, req.actor!);
     return sendSuccess(res, review);
   } catch (err: any) {
     if (err.name === "ZodError") {
@@ -102,7 +101,7 @@ router.post("/:id/submit", async (req: Request, res: Response, next: NextFunctio
     const { id } = idParamSchema.parse(req.params);
     const data = submitReviewSchema.parse(req.body);
     const orgId = req.user!.empcloudOrgId;
-    const review = await reviewService.submitReview(orgId, id, data);
+    const review = await reviewService.submitReview(orgId, id, data, req.actor!);
     return sendSuccess(res, review);
   } catch (err: any) {
     if (err.name === "ZodError") {
@@ -124,6 +123,7 @@ router.post("/:id/competency-ratings", async (req: Request, res: Response, next:
       data.competency_id,
       data.rating,
       data.comments,
+      req.actor!,
     );
     return sendSuccess(res, rating, 201);
   } catch (err: any) {
@@ -142,7 +142,7 @@ router.delete(
     try {
       const { id } = idParamSchema.parse(req.params);
       const orgId = req.user!.empcloudOrgId;
-      await reviewService.deleteReview(orgId, id);
+      await reviewService.deleteReview(orgId, id, req.actor!);
       return sendSuccess(res, { message: "Review deleted" });
     } catch (err) {
       next(err);
@@ -159,7 +159,7 @@ router.post(
       const { id } = idParamSchema.parse(req.params);
       const data = reassignReviewerSchema.parse(req.body);
       const orgId = req.user!.empcloudOrgId;
-      const review = await reviewService.reassignReviewer(orgId, id, data.reviewer_id);
+      const review = await reviewService.reassignReviewer(orgId, id, data.reviewer_id, req.actor!);
       return sendSuccess(res, review);
     } catch (err: any) {
       if (err.name === "ZodError") {

@@ -35,8 +35,7 @@ import { BackToDashboard } from "@/components/BackToDashboard";
 import { NotificationBell } from "@/components/NotificationBell";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
-
-type Role = "org_admin" | "hr_admin" | "hr_manager" | "employee";
+import type { CanonicalRole } from "@emp-performance/shared";
 
 interface NavItem {
   to: string;
@@ -103,7 +102,7 @@ const NAV_SECTIONS: NavSection[] = [
   },
 ];
 
-const ADMIN_ROLES: Role[] = ["org_admin", "hr_admin", "hr_manager"];
+const ADMIN_ROLES: CanonicalRole[] = ["super_admin", "org_admin", "hr_admin", "hr_manager"];
 
 // Routes that need exact-match highlighting (index routes whose path is a
 // prefix of deeper routes).
@@ -164,7 +163,7 @@ export function DashboardLayout() {
             icon-only rail */}
         <nav className={cn("flex-1 overflow-y-auto py-4", collapsed ? "px-2" : "px-3")}>
           {NAV_SECTIONS.map((section, si) => {
-            const isAdmin = ADMIN_ROLES.includes((user?.role || "employee") as Role);
+            const isAdmin = ADMIN_ROLES.includes(user?.role || "employee");
             const visibleItems = section.items.filter((item) => !item.adminOnly || isAdmin);
             if (visibleItems.length === 0) return null;
             return (

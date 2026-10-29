@@ -20,8 +20,10 @@ RUN pnpm --filter @emp-performance/server build
 # --- Production stage ---
 FROM node:20-alpine
 WORKDIR /app
+ENV NODE_ENV=production
 
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN mkdir -p /app/logs && chown -R appuser:appgroup /app/logs
 
 COPY --from=builder /app/package.json /app/pnpm-workspace.yaml ./
 COPY --from=builder /app/node_modules ./node_modules
@@ -33,4 +35,6 @@ COPY --from=builder /app/packages/server/node_modules ./packages/server/node_mod
 
 USER appuser
 EXPOSE 4300
-CMD ["node", "packages/server/dist/index.js"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:4300/health >/dev/null || exit 1
+CMD ["node", "packages/server/dist/server/src/index.js"]

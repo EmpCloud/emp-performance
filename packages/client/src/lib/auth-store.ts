@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { CanonicalRole } from "@emp-performance/shared";
 
 export interface AuthUser {
   id: number;
@@ -6,7 +7,7 @@ export interface AuthUser {
   empcloudOrgId: number;
   orgId: number;
   performanceProfileId: string | null;
-  role: string;
+  role: CanonicalRole;
   email: string;
   firstName: string;
   lastName: string;

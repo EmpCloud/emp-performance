@@ -4,6 +4,7 @@
 
 import knex from "knex";
 import type { Knex } from "knex";
+import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { IDBAdapter, QueryOptions, QueryResult, TransactionContext } from "./interface";
 
@@ -21,6 +22,7 @@ export class KnexAdapter implements IDBAdapter {
     database: string;
     pool?: { min: number; max: number };
   }) {
+    const runtimeExtension = path.extname(__filename).slice(1) || "js";
     this.config = {
       client: config.client,
       connection: {
@@ -32,12 +34,12 @@ export class KnexAdapter implements IDBAdapter {
       },
       pool: config.pool || { min: 2, max: 10 },
       migrations: {
-        directory: "./src/db/migrations/sql",
-        extension: "ts",
+        directory: path.resolve(__dirname, "../migrations/sql"),
+        extension: runtimeExtension,
       },
       seeds: {
-        directory: "./src/db/seeds/sql",
-        extension: "ts",
+        directory: path.resolve(__dirname, "../seeds/sql"),
+        extension: runtimeExtension,
       },
     };
   }

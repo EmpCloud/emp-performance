@@ -50,6 +50,7 @@ export const config = {
     // Issuer/audience claims to enforce when present (optional).
     issuer: process.env.EMPCLOUD_SSO_ISSUER || undefined,
     audience: process.env.EMPCLOUD_SSO_AUDIENCE || undefined,
+    clientId: process.env.EMPCLOUD_SSO_CLIENT_ID || "empcloud-dashboard",
   },
 
   // Public base URL of the client app (used to build password-reset links).

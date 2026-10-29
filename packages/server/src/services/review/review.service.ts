@@ -1,7 +1,10 @@
 import { v4 as uuidv4 } from "uuid";
 import { getDB } from "../../db/adapters";
+import { findUserById } from "../../db/empcloud";
 import { NotFoundError, ValidationError, ConflictError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
+import type { ActorContext } from "../../security/actor-context";
+import { assertReviewAccess } from "../../security/policies/review.policy";
 import type {
   Review,
   ReviewCompetencyRating,
@@ -20,6 +23,19 @@ const REVIEW_SORTABLE_COLUMNS = new Set([
   "submitted_at",
 ]);
 
+async function assertActiveOrganizationUser(
+  orgId: number,
+  userId: number,
+  participantLabel: "Employee" | "Reviewer",
+): Promise<void> {
+  const user = await findUserById(userId);
+  if (!user || user.organization_id !== orgId || user.status !== 1) {
+    throw new ValidationError(
+      `${participantLabel} must be an active user in this organization`,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Create review
 // ---------------------------------------------------------------------------
@@ -32,8 +48,15 @@ export async function createReview(
     reviewer_id: number;
     type: string;
   },
+  actor: ActorContext,
 ): Promise<Review> {
   const db = getDB();
+
+  assertReviewAccess(actor, "create", {
+    organizationId: orgId,
+    employeeId: data.employee_id,
+    reviewerId: data.reviewer_id,
+  });
 
   // Verify cycle belongs to org
   const cycle = await db.findOne<ReviewCycle>("review_cycles", {
@@ -41,6 +64,11 @@ export async function createReview(
     organization_id: orgId,
   });
   if (!cycle) throw new NotFoundError("ReviewCycle", data.cycle_id);
+
+  await Promise.all([
+    assertActiveOrganizationUser(orgId, data.employee_id, "Employee"),
+    assertActiveOrganizationUser(orgId, data.reviewer_id, "Reviewer"),
+  ]);
 
   // Reject duplicates on (cycle, employee, reviewer, type) so a participant
   // never ends up with two identical review rows (#R10).
@@ -241,10 +269,19 @@ export async function listReviews(
 
 // Hard-delete a review (and its competency ratings via FK cascade). Submitted
 // reviews are protected so completed history is never silently dropped (#R8).
-export async function deleteReview(orgId: number, id: string): Promise<void> {
+export async function deleteReview(
+  orgId: number,
+  id: string,
+  actor: ActorContext,
+): Promise<void> {
   const db = getDB();
   const review = await db.findOne<Review>("reviews", { id, organization_id: orgId });
   if (!review) throw new NotFoundError("Review", id);
+  assertReviewAccess(actor, "delete", {
+    organizationId: review.organization_id,
+    employeeId: review.employee_id,
+    reviewerId: review.reviewer_id,
+  });
   if (review.status === "submitted") {
     throw new ValidationError("Cannot delete a submitted review");
   }
@@ -258,16 +295,24 @@ export async function reassignReviewer(
   orgId: number,
   id: string,
   newReviewerId: number,
+  actor: ActorContext,
 ): Promise<Review> {
   const db = getDB();
   const review = await db.findOne<Review>("reviews", { id, organization_id: orgId });
   if (!review) throw new NotFoundError("Review", id);
+  assertReviewAccess(actor, "reassign", {
+    organizationId: review.organization_id,
+    employeeId: review.employee_id,
+    reviewerId: review.reviewer_id,
+  });
   if (review.status === "submitted") {
     throw new ValidationError("Cannot reassign a submitted review");
   }
   if (review.reviewer_id === newReviewerId) {
     return review;
   }
+
+  await assertActiveOrganizationUser(orgId, newReviewerId, "Reviewer");
 
   const duplicate = await db.findOne<Review>("reviews", {
     organization_id: orgId,
@@ -298,6 +343,7 @@ export async function saveDraft(
     strengths?: string;
     improvements?: string;
   },
+  actor: ActorContext,
 ): Promise<Review> {
   const db = getDB();
   const review = await db.findOne<Review>("reviews", {
@@ -305,6 +351,11 @@ export async function saveDraft(
     organization_id: orgId,
   });
   if (!review) throw new NotFoundError("Review", id);
+  assertReviewAccess(actor, "save_draft", {
+    organizationId: review.organization_id,
+    employeeId: review.employee_id,
+    reviewerId: review.reviewer_id,
+  });
   if (review.status === "submitted") {
     throw new ValidationError("Cannot edit a submitted review");
   }
@@ -331,6 +382,7 @@ export async function submitReview(
     strengths?: string;
     improvements?: string;
   },
+  actor: ActorContext,
 ): Promise<Review> {
   const db = getDB();
   const review = await db.findOne<Review>("reviews", {
@@ -338,6 +390,11 @@ export async function submitReview(
     organization_id: orgId,
   });
   if (!review) throw new NotFoundError("Review", id);
+  assertReviewAccess(actor, "submit", {
+    organizationId: review.organization_id,
+    employeeId: review.employee_id,
+    reviewerId: review.reviewer_id,
+  });
   if (review.status === "submitted") {
     throw new ValidationError("Review has already been submitted");
   }
@@ -387,7 +444,8 @@ export async function rateCompetency(
   reviewId: string,
   competencyId: string,
   rating: number,
-  comments?: string,
+  comments: string | undefined,
+  actor: ActorContext,
 ): Promise<ReviewCompetencyRating> {
   const db = getDB();
   const review = await db.findOne<Review>("reviews", {
@@ -395,6 +453,11 @@ export async function rateCompetency(
     organization_id: orgId,
   });
   if (!review) throw new NotFoundError("Review", reviewId);
+  assertReviewAccess(actor, "rate_competency", {
+    organizationId: review.organization_id,
+    employeeId: review.employee_id,
+    reviewerId: review.reviewer_id,
+  });
   if (review.status === "submitted") {
     throw new ValidationError("Cannot rate competencies on a submitted review");
   }

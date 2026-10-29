@@ -34,11 +34,20 @@ import * as reviewCycleService from "../../services/review/review-cycle.service"
 import * as reviewService from "../../services/review/review.service";
 import * as analyticsService from "../../services/analytics/analytics.service";
 import * as notificationService from "../../services/notification/notification-settings.service";
+import type { ActorContext } from "../../security/actor-context";
 
 const ORG_ID = 5;
 const USER_ID = 522;
 const EMP_USER_ID = 524;
 const MANAGER_USER_ID = 523;
+const REVIEW_ADMIN_ACTOR: ActorContext = {
+  userId: USER_ID,
+  employeeId: USER_ID,
+  organizationId: ORG_ID,
+  role: "hr_admin",
+  roles: ["hr_admin"],
+  authenticationMethod: "jwt",
+};
 const db = getDB();
 const cleanupIds: { table: string; id: string }[] = [];
 function trackCleanup(table: string, id: string) { cleanupIds.push({ table, id }); }
@@ -74,7 +83,7 @@ describe("AISummaryService", () => {
     const cycle = await tryCall(() => reviewCycleService.createCycle(ORG_ID, { name: "SC AI Cycle", type: "annual", startDate: "2026-01-01", endDate: "2026-12-31", created_by: USER_ID } as any));
     if (cycle) {
       trackCleanup("review_cycles", cycle.id);
-      const review = await tryCall(() => reviewService.createReview(ORG_ID, { cycleId: cycle.id, revieweeId: EMP_USER_ID, reviewerId: MANAGER_USER_ID, type: "manager" }));
+      const review = await tryCall(() => reviewService.createReview(ORG_ID, { cycleId: cycle.id, revieweeId: EMP_USER_ID, reviewerId: MANAGER_USER_ID, type: "manager" } as any, REVIEW_ADMIN_ACTOR));
       if (review) {
         trackCleanup("reviews", review.id);
         await tryCall(() => aiSummaryService.generateReviewSummary(ORG_ID, review.id));

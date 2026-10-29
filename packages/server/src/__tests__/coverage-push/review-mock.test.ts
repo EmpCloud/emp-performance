@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const { mockFindUserById } = vi.hoisted(() => ({
+  mockFindUserById: vi.fn(),
+}));
+
 // ---------------------------------------------------------------------------
 // Mock DB adapter
 // ---------------------------------------------------------------------------
@@ -16,6 +20,10 @@ const mockDB: any = {
 
 vi.mock("../../db/adapters", () => ({
   getDB: () => mockDB,
+}));
+
+vi.mock("../../db/empcloud", () => ({
+  findUserById: mockFindUserById,
 }));
 
 vi.mock("../../utils/logger", () => ({
@@ -42,10 +50,33 @@ import {
   saveDraft,
   submitReview,
   rateCompetency,
+  deleteReview,
+  reassignReviewer,
   getReviewsForParticipant,
 } from "../../services/review/review.service";
+import type { ActorContext } from "../../security/actor-context";
 
 const ORG = 1;
+const REVIEWER_ACTOR: ActorContext = {
+  userId: 20,
+  employeeId: 20,
+  organizationId: ORG,
+  role: "employee",
+  roles: ["employee"],
+  authenticationMethod: "access_token",
+};
+const OTHER_EMPLOYEE_ACTOR: ActorContext = {
+  ...REVIEWER_ACTOR,
+  userId: 30,
+  employeeId: 30,
+};
+const HR_ACTOR: ActorContext = {
+  ...REVIEWER_ACTOR,
+  userId: 99,
+  employeeId: 99,
+  role: "hr_admin",
+  roles: ["hr_admin"],
+};
 
 describe("review-cycle.service", () => {
   beforeEach(() => {
@@ -346,12 +377,19 @@ describe("review.service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDB.findMany.mockResolvedValue({ data: [], total: 0, page: 1, limit: 20, totalPages: 0 });
+    mockFindUserById.mockImplementation(async (id: number) => ({
+      id,
+      organization_id: ORG,
+      status: 1,
+      first_name: "Test",
+      last_name: "User",
+    }));
   });
 
   describe("createReview", () => {
     it("should throw if cycle not found", async () => {
       mockDB.findOne.mockResolvedValue(null);
-      await expect(createReview(ORG, { cycle_id: "x", employee_id: 10, reviewer_id: 20, type: "manager" })).rejects.toThrow("ReviewCycle");
+      await expect(createReview(ORG, { cycle_id: "x", employee_id: 10, reviewer_id: 20, type: "manager" }, HR_ACTOR)).rejects.toThrow("ReviewCycle");
     });
 
     it("should create a review", async () => {
@@ -360,7 +398,7 @@ describe("review.service", () => {
         .mockResolvedValueOnce({ id: "c-1" })
         .mockResolvedValueOnce(null);
       mockDB.create.mockResolvedValue({ id: "rev-1", status: "pending" });
-      const result = await createReview(ORG, { cycle_id: "c-1", employee_id: 10, reviewer_id: 20, type: "manager" });
+      const result = await createReview(ORG, { cycle_id: "c-1", employee_id: 10, reviewer_id: 20, type: "manager" }, HR_ACTOR);
       expect(result.status).toBe("pending");
     });
 
@@ -369,8 +407,38 @@ describe("review.service", () => {
         .mockResolvedValueOnce({ id: "c-1" })
         .mockResolvedValueOnce({ id: "rev-existing" });
       await expect(
-        createReview(ORG, { cycle_id: "c-1", employee_id: 10, reviewer_id: 20, type: "manager" }),
+        createReview(ORG, { cycle_id: "c-1", employee_id: 10, reviewer_id: 20, type: "manager" }, HR_ACTOR),
       ).rejects.toThrow();
+    });
+
+    it("should reject review creation by an employee before touching the database", async () => {
+      await expect(
+        createReview(
+          ORG,
+          { cycle_id: "c-1", employee_id: 10, reviewer_id: 20, type: "manager" },
+          OTHER_EMPLOYEE_ACTOR,
+        ),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(mockDB.findOne).not.toHaveBeenCalled();
+      expect(mockDB.create).not.toHaveBeenCalled();
+    });
+
+    it("should reject a participant from another organization without creating a review", async () => {
+      mockDB.findOne.mockResolvedValueOnce({ id: "c-1" });
+      mockFindUserById.mockImplementation(async (id: number) => ({
+        id,
+        organization_id: id === 20 ? ORG + 1 : ORG,
+        status: 1,
+      }));
+
+      await expect(
+        createReview(
+          ORG,
+          { cycle_id: "c-1", employee_id: 10, reviewer_id: 20, type: "manager" },
+          HR_ACTOR,
+        ),
+      ).rejects.toMatchObject({ statusCode: 400 });
+      expect(mockDB.create).not.toHaveBeenCalled();
     });
   });
 
@@ -401,121 +469,259 @@ describe("review.service", () => {
   describe("saveDraft", () => {
     it("should throw if review not found", async () => {
       mockDB.findOne.mockResolvedValue(null);
-      await expect(saveDraft(ORG, "x", {})).rejects.toThrow("Review");
+      await expect(saveDraft(ORG, "x", {}, REVIEWER_ACTOR)).rejects.toThrow("Review");
     });
 
     it("should throw if review is submitted", async () => {
-      mockDB.findOne.mockResolvedValue({ id: "rev-1", status: "submitted" });
-      await expect(saveDraft(ORG, "rev-1", {})).rejects.toThrow("submitted");
+      mockDB.findOne.mockResolvedValue({ id: "rev-1", status: "submitted", reviewer_id: 20, organization_id: ORG });
+      await expect(saveDraft(ORG, "rev-1", {}, REVIEWER_ACTOR)).rejects.toThrow("submitted");
     });
 
     it("should save draft with all fields", async () => {
-      mockDB.findOne.mockResolvedValue({ id: "rev-1", status: "pending" });
+      mockDB.findOne.mockResolvedValue({ id: "rev-1", status: "pending", reviewer_id: 20, organization_id: ORG });
       mockDB.update.mockResolvedValue({ id: "rev-1", status: "draft" });
       const result = await saveDraft(ORG, "rev-1", {
         overall_rating: 4, summary: "Good", strengths: "Strong", improvements: "Improve",
-      });
+      }, REVIEWER_ACTOR);
       expect(result.status).toBe("draft");
+    });
+
+    it("should reject draft changes by the review subject or another employee", async () => {
+      mockDB.findOne.mockResolvedValue({
+        id: "rev-1",
+        status: "pending",
+        reviewer_id: REVIEWER_ACTOR.userId,
+        employee_id: OTHER_EMPLOYEE_ACTOR.userId,
+        organization_id: ORG,
+      });
+
+      await expect(
+        saveDraft(ORG, "rev-1", { summary: "tampered" }, OTHER_EMPLOYEE_ACTOR),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(mockDB.update).not.toHaveBeenCalled();
     });
   });
 
   describe("submitReview", () => {
     it("should throw if review not found", async () => {
       mockDB.findOne.mockResolvedValue(null);
-      await expect(submitReview(ORG, "x", { overall_rating: 4, summary: "Good" })).rejects.toThrow("Review");
+      await expect(submitReview(ORG, "x", { overall_rating: 4, summary: "Good" }, REVIEWER_ACTOR)).rejects.toThrow("Review");
     });
 
     it("should throw if already submitted", async () => {
-      mockDB.findOne.mockResolvedValue({ id: "rev-1", status: "submitted" });
-      await expect(submitReview(ORG, "rev-1", { overall_rating: 4, summary: "Good" })).rejects.toThrow("already been submitted");
+      mockDB.findOne.mockResolvedValue({ id: "rev-1", status: "submitted", reviewer_id: 20, organization_id: ORG });
+      await expect(submitReview(ORG, "rev-1", { overall_rating: 4, summary: "Good" }, REVIEWER_ACTOR)).rejects.toThrow("already been submitted");
     });
 
     it("should submit review without framework", async () => {
       mockDB.findOne
-        .mockResolvedValueOnce({ id: "rev-1", status: "draft", cycle_id: "c-1" }) // review
+        .mockResolvedValueOnce({ id: "rev-1", status: "draft", cycle_id: "c-1", reviewer_id: 20, organization_id: ORG }) // review
         .mockResolvedValueOnce({ id: "c-1", framework_id: null }); // cycle
       mockDB.update.mockResolvedValue({ id: "rev-1", status: "submitted" });
 
-      const result = await submitReview(ORG, "rev-1", { overall_rating: 4, summary: "Good", strengths: "Yes", improvements: "No" });
+      const result = await submitReview(ORG, "rev-1", { overall_rating: 4, summary: "Good", strengths: "Yes", improvements: "No" }, REVIEWER_ACTOR);
       expect(result.status).toBe("submitted");
     });
 
     it("should throw if competencies are unrated when framework exists", async () => {
       mockDB.findOne
-        .mockResolvedValueOnce({ id: "rev-1", status: "draft", cycle_id: "c-1" })
+        .mockResolvedValueOnce({ id: "rev-1", status: "draft", cycle_id: "c-1", reviewer_id: 20, organization_id: ORG })
         .mockResolvedValueOnce({ id: "c-1", framework_id: "fw-1" });
       mockDB.findMany
         .mockResolvedValueOnce({ data: [{ id: "comp-1", name: "Leadership" }, { id: "comp-2", name: "Technical" }], total: 2, page: 1, limit: 20, totalPages: 1 })
         .mockResolvedValueOnce({ data: [{ id: "r-1", competency_id: "comp-1" }], total: 1, page: 1, limit: 20, totalPages: 1 });
 
-      await expect(submitReview(ORG, "rev-1", { overall_rating: 4, summary: "Good" })).rejects.toThrow("Technical");
+      await expect(submitReview(ORG, "rev-1", { overall_rating: 4, summary: "Good" }, REVIEWER_ACTOR)).rejects.toThrow("Technical");
     });
 
     it("should submit when all competencies rated", async () => {
       mockDB.findOne
-        .mockResolvedValueOnce({ id: "rev-1", status: "draft", cycle_id: "c-1" })
+        .mockResolvedValueOnce({ id: "rev-1", status: "draft", cycle_id: "c-1", reviewer_id: 20, organization_id: ORG })
         .mockResolvedValueOnce({ id: "c-1", framework_id: "fw-1" });
       mockDB.findMany
         .mockResolvedValueOnce({ data: [{ id: "comp-1", name: "Leadership" }], total: 1, page: 1, limit: 20, totalPages: 1 })
         .mockResolvedValueOnce({ data: [{ id: "r-1", competency_id: "comp-1" }], total: 1, page: 1, limit: 20, totalPages: 1 });
       mockDB.update.mockResolvedValue({ id: "rev-1", status: "submitted" });
 
-      const result = await submitReview(ORG, "rev-1", { overall_rating: 4, summary: "Good" });
+      const result = await submitReview(ORG, "rev-1", { overall_rating: 4, summary: "Good" }, REVIEWER_ACTOR);
       expect(result.status).toBe("submitted");
     });
 
     it("should handle update error during submit", async () => {
       mockDB.findOne
-        .mockResolvedValueOnce({ id: "rev-1", status: "draft", cycle_id: "c-1" })
+        .mockResolvedValueOnce({ id: "rev-1", status: "draft", cycle_id: "c-1", reviewer_id: 20, organization_id: ORG })
         .mockResolvedValueOnce({ id: "c-1", framework_id: null });
       mockDB.update.mockRejectedValue(new Error("DB error"));
 
-      await expect(submitReview(ORG, "rev-1", { overall_rating: 4, summary: "Good" })).rejects.toThrow("DB error");
+      await expect(submitReview(ORG, "rev-1", { overall_rating: 4, summary: "Good" }, REVIEWER_ACTOR)).rejects.toThrow("DB error");
+    });
+
+    it("should reject submission by an employee who is not the assigned reviewer", async () => {
+      mockDB.findOne.mockResolvedValue({
+        id: "rev-1",
+        status: "draft",
+        cycle_id: "c-1",
+        reviewer_id: REVIEWER_ACTOR.userId,
+        employee_id: OTHER_EMPLOYEE_ACTOR.userId,
+        organization_id: ORG,
+      });
+
+      await expect(
+        submitReview(ORG, "rev-1", { overall_rating: 4, summary: "tampered" }, OTHER_EMPLOYEE_ACTOR),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(mockDB.update).not.toHaveBeenCalled();
+      expect(mockDB.findMany).not.toHaveBeenCalled();
     });
   });
 
   describe("rateCompetency", () => {
     it("should throw if review not found", async () => {
       mockDB.findOne.mockResolvedValue(null);
-      await expect(rateCompetency(ORG, "x", "comp-1", 4)).rejects.toThrow("Review");
+      await expect(rateCompetency(ORG, "x", "comp-1", 4, undefined, REVIEWER_ACTOR)).rejects.toThrow("Review");
     });
 
     it("should throw if review is submitted", async () => {
-      mockDB.findOne.mockResolvedValue({ id: "rev-1", status: "submitted" });
-      await expect(rateCompetency(ORG, "rev-1", "comp-1", 4)).rejects.toThrow("submitted");
+      mockDB.findOne.mockResolvedValue({ id: "rev-1", status: "submitted", reviewer_id: 20, organization_id: ORG });
+      await expect(rateCompetency(ORG, "rev-1", "comp-1", 4, undefined, REVIEWER_ACTOR)).rejects.toThrow("submitted");
     });
 
     it("should update existing rating", async () => {
       mockDB.findOne
-        .mockResolvedValueOnce({ id: "rev-1", status: "draft" }) // review
+        .mockResolvedValueOnce({ id: "rev-1", status: "draft", reviewer_id: 20, organization_id: ORG }) // review
         .mockResolvedValueOnce({ id: "rating-1", review_id: "rev-1", competency_id: "comp-1" }); // existing
       mockDB.update.mockResolvedValue({ id: "rating-1", rating: 5 });
 
-      const result = await rateCompetency(ORG, "rev-1", "comp-1", 5, "Excellent");
+      const result = await rateCompetency(ORG, "rev-1", "comp-1", 5, "Excellent", REVIEWER_ACTOR);
       expect(result.rating).toBe(5);
     });
 
     it("should create new rating and change pending to draft", async () => {
       mockDB.findOne
-        .mockResolvedValueOnce({ id: "rev-1", status: "pending" }) // review
+        .mockResolvedValueOnce({ id: "rev-1", status: "pending", reviewer_id: 20, organization_id: ORG }) // review
         .mockResolvedValueOnce(null); // no existing
       mockDB.create.mockResolvedValue({ id: "rating-new", rating: 4 });
       mockDB.update.mockResolvedValue({ id: "rev-1", status: "draft" });
 
-      const result = await rateCompetency(ORG, "rev-1", "comp-1", 4);
+      const result = await rateCompetency(ORG, "rev-1", "comp-1", 4, undefined, REVIEWER_ACTOR);
       expect(mockDB.update).toHaveBeenCalledWith("reviews", "rev-1", { status: "draft" });
       expect(result.rating).toBe(4);
     });
 
     it("should create new rating without changing draft status", async () => {
       mockDB.findOne
-        .mockResolvedValueOnce({ id: "rev-1", status: "draft" })
+        .mockResolvedValueOnce({ id: "rev-1", status: "draft", reviewer_id: 20, organization_id: ORG })
         .mockResolvedValueOnce(null);
       mockDB.create.mockResolvedValue({ id: "rating-new", rating: 3 });
 
-      await rateCompetency(ORG, "rev-1", "comp-1", 3);
+      await rateCompetency(ORG, "rev-1", "comp-1", 3, undefined, REVIEWER_ACTOR);
       // Should NOT call update to change status (already draft)
       expect(mockDB.update).not.toHaveBeenCalledWith("reviews", expect.anything(), expect.objectContaining({ status: "draft" }));
+    });
+
+    it("should reject competency ratings by an employee who is not the assigned reviewer", async () => {
+      mockDB.findOne.mockResolvedValue({
+        id: "rev-1",
+        status: "draft",
+        reviewer_id: REVIEWER_ACTOR.userId,
+        employee_id: OTHER_EMPLOYEE_ACTOR.userId,
+        organization_id: ORG,
+      });
+
+      await expect(
+        rateCompetency(ORG, "rev-1", "comp-1", 4, undefined, OTHER_EMPLOYEE_ACTOR),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(mockDB.update).not.toHaveBeenCalled();
+      expect(mockDB.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("deleteReview", () => {
+    it("should allow an HR administrator to delete an unsubmitted review", async () => {
+      mockDB.findOne.mockResolvedValue({
+        id: "rev-1",
+        status: "draft",
+        reviewer_id: REVIEWER_ACTOR.userId,
+        organization_id: ORG,
+      });
+
+      await deleteReview(ORG, "rev-1", HR_ACTOR);
+
+      expect(mockDB.delete).toHaveBeenCalledWith("reviews", "rev-1");
+    });
+
+    it("should reject deletion by an employee without deleting the review", async () => {
+      mockDB.findOne.mockResolvedValue({
+        id: "rev-1",
+        status: "draft",
+        reviewer_id: REVIEWER_ACTOR.userId,
+        organization_id: ORG,
+      });
+
+      await expect(
+        deleteReview(ORG, "rev-1", REVIEWER_ACTOR),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(mockDB.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("reassignReviewer", () => {
+    it("should allow HR to reassign an unsubmitted review", async () => {
+      mockDB.findOne
+        .mockResolvedValueOnce({
+          id: "rev-1",
+          status: "draft",
+          cycle_id: "c-1",
+          employee_id: 10,
+          reviewer_id: REVIEWER_ACTOR.userId,
+          type: "manager",
+          organization_id: ORG,
+        })
+        .mockResolvedValueOnce(null);
+      mockDB.update.mockResolvedValue({ id: "rev-1", reviewer_id: 40 });
+
+      const result = await reassignReviewer(ORG, "rev-1", 40, HR_ACTOR);
+
+      expect(result.reviewer_id).toBe(40);
+      expect(mockDB.update).toHaveBeenCalledWith("reviews", "rev-1", { reviewer_id: 40 });
+    });
+
+    it("should reject reassignment by an employee without updating the review", async () => {
+      mockDB.findOne.mockResolvedValue({
+        id: "rev-1",
+        status: "draft",
+        cycle_id: "c-1",
+        employee_id: 10,
+        reviewer_id: REVIEWER_ACTOR.userId,
+        type: "manager",
+        organization_id: ORG,
+      });
+
+      await expect(
+        reassignReviewer(ORG, "rev-1", 40, REVIEWER_ACTOR),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(mockDB.update).not.toHaveBeenCalled();
+    });
+
+    it("should reject reassignment to a reviewer outside the organization", async () => {
+      mockDB.findOne.mockResolvedValue({
+        id: "rev-1",
+        status: "draft",
+        cycle_id: "c-1",
+        employee_id: 10,
+        reviewer_id: REVIEWER_ACTOR.userId,
+        type: "manager",
+        organization_id: ORG,
+      });
+      mockFindUserById.mockResolvedValue({
+        id: 40,
+        organization_id: ORG + 1,
+        status: 1,
+      });
+
+      await expect(
+        reassignReviewer(ORG, "rev-1", 40, HR_ACTOR),
+      ).rejects.toMatchObject({ statusCode: 400 });
+      expect(mockDB.update).not.toHaveBeenCalled();
     });
   });
 
