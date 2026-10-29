@@ -19,7 +19,7 @@ const HR_ROLES = ["hr_admin", "hr_manager", "org_admin", "super_admin"] as const
 // GET /analytics/overview — org-wide stats (HR only, A4)
 router.get(
   "/overview",
-  authorize("hr_admin", "hr_manager", "org_admin"),
+  authorize("super_admin", "hr_admin", "hr_manager", "org_admin", "service"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const orgId = req.user!.empcloudOrgId;

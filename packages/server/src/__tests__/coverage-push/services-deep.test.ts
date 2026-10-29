@@ -37,8 +37,10 @@ vi.mock("../../db/adapters", () => ({
 }));
 
 vi.mock("../../db/empcloud", () => ({
+  API_KEY_PREFIX: "empc_",
   initEmpCloudDB: vi.fn().mockResolvedValue(undefined),
   closeEmpCloudDB: vi.fn().mockResolvedValue(undefined),
+  findValidApiKey: vi.fn().mockResolvedValue(null),
   findUserByEmail: vi.fn().mockResolvedValue(null),
   findUserById: vi.fn().mockResolvedValue({ id: 522, email: "test@test.com", first_name: "Test", last_name: "User", organization_id: 5, role: "employee" }),
   findOrgById: vi.fn().mockResolvedValue({ id: 5, name: "TestOrg" }),
@@ -1078,11 +1080,11 @@ describe("Auth Middleware", () => {
     expect(req.user.empcloudUserId).toBe(522);
   });
 
-  it("authenticate accepts query token", () => {
+  it("authenticate rejects query token", () => {
     const token = jwt.default.sign({ empcloudUserId: 1, empcloudOrgId: 1 }, "test-jwt-secret-coverage-push");
     const req = { headers: {}, query: { token } } as any;
     authMiddleware.authenticate(req, mockRes, mockNext);
-    expect(mockNext).toHaveBeenCalledWith();
+    expect(mockNext).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 401 }));
   });
 
   it("authenticate handles expired token", () => {
@@ -1094,12 +1096,14 @@ describe("Auth Middleware", () => {
   it("authenticate handles internal service bypass", () => {
     process.env.INTERNAL_SERVICE_SECRET = "test-secret";
     const req = {
+      method: "GET",
+      originalUrl: "/api/v1/analytics/overview?organization_id=5",
       headers: { "x-internal-service": "empcloud-dashboard", "x-internal-secret": "test-secret" },
       query: { organization_id: "5" },
     } as any;
     authMiddleware.authenticate(req, mockRes, mockNext);
     expect(mockNext).toHaveBeenCalledWith();
-    expect(req.user.role).toBe("org_admin");
+    expect(req.user.role).toBe("service");
     delete process.env.INTERNAL_SERVICE_SECRET;
   });
 

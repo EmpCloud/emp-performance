@@ -23,13 +23,14 @@ import {
 } from "../../db/empcloud";
 import { UnauthorizedError, ValidationError, ConflictError, NotFoundError } from "../../utils/errors";
 import type { AuthPayload } from "../../api/middleware/auth.middleware";
+import { normalizeRole, type CanonicalRole } from "../../security/roles";
 
 interface LoginResult {
   user: {
     empcloudUserId: number;
     empcloudOrgId: number;
     performanceProfileId: string | null;
-    role: string;
+    role: CanonicalRole;
     email: string;
     firstName: string;
     lastName: string;
@@ -141,6 +142,10 @@ export async function login(
     throw new UnauthorizedError("Invalid email or password");
   }
 
+  if (user.status !== 1) {
+    throw new UnauthorizedError("Account is inactive");
+  }
+
   const org = await findOrgById(user.organization_id);
   if (!org || !org.is_active) {
     throw new UnauthorizedError("Organization is inactive");
@@ -150,7 +155,7 @@ export async function login(
     empcloudUserId: user.id,
     empcloudOrgId: user.organization_id,
     performanceProfileId: null,
-    role: user.role as AuthPayload["role"],
+    role: normalizeRole(user.role),
     email: user.email,
     firstName: user.first_name,
     lastName: user.last_name,
@@ -194,7 +199,7 @@ export async function register(data: RegisterData, ctx?: SessionContext): Promis
     empcloudUserId: user.id,
     empcloudOrgId: org.id,
     performanceProfileId: null,
-    role: user.role as AuthPayload["role"],
+    role: normalizeRole(user.role),
     email: user.email,
     firstName: user.first_name,
     lastName: user.last_name,
@@ -224,42 +229,39 @@ export async function register(data: RegisterData, ctx?: SessionContext): Promis
  */
 export async function ssoLogin(empcloudToken: string, ctx?: SessionContext): Promise<LoginResult> {
   const publicKey = config.sso.publicKey;
-  let decoded: jwt.JwtPayload;
+  if (!publicKey) {
+    logger.error("SSO login rejected because EMPCLOUD_SSO_PUBLIC_KEY is not configured");
+    throw new UnauthorizedError("SSO is not configured");
+  }
 
-  if (publicKey) {
-    try {
-      const verified = jwt.verify(empcloudToken, publicKey, {
-        algorithms: ["RS256"],
-        issuer: config.sso.issuer,
-        audience: config.sso.audience,
-      });
-      if (typeof verified === "string") {
-        throw new UnauthorizedError("Invalid SSO token");
-      }
-      decoded = verified;
-    } catch (err) {
-      if (err instanceof UnauthorizedError) throw err;
-      logger.warn(`SSO token signature verification failed: ${(err as Error).message}`);
-      throw new UnauthorizedError("Invalid or expired SSO token");
-    }
-  } else {
-    // No public key configured: we cannot cryptographically verify the token,
-    // so the jti lookup below becomes the sole proof of authenticity and is
-    // therefore mandatory (no silent skip).
-    const raw = jwt.decode(empcloudToken);
-    if (!raw || typeof raw === "string") {
+  let decoded: jwt.JwtPayload;
+  try {
+    const verified = jwt.verify(empcloudToken, publicKey, {
+      algorithms: ["RS256"],
+      issuer: config.sso.issuer,
+      audience: config.sso.audience,
+    });
+    if (typeof verified === "string") {
       throw new UnauthorizedError("Invalid SSO token");
     }
-    decoded = raw;
-    logger.warn(
-      "EMPCLOUD_SSO_PUBLIC_KEY is not configured — SSO token signature is NOT verified. " +
-        "Falling back to a mandatory jti lookup. Set the public key in production.",
-    );
+    decoded = verified;
+  } catch (err) {
+    if (err instanceof UnauthorizedError) throw err;
+    logger.warn(`SSO token signature verification failed: ${(err as Error).message}`);
+    throw new UnauthorizedError("Invalid or expired SSO token");
   }
 
   const userId = Number(decoded.sub);
-  if (!userId) {
+  const organizationId = Number(decoded.org_id);
+  const clientId = typeof decoded.client_id === "string" ? decoded.client_id : "";
+  if (!Number.isSafeInteger(userId) || userId <= 0) {
     throw new UnauthorizedError("SSO token missing user id");
+  }
+  if (!Number.isSafeInteger(organizationId) || organizationId <= 0) {
+    throw new UnauthorizedError("SSO token missing organization id");
+  }
+  if (!clientId || clientId !== config.sso.clientId) {
+    throw new UnauthorizedError("SSO token was not issued for this client");
   }
 
   // The jti MUST be present and resolve to a live oauth_access_tokens row.
@@ -270,17 +272,30 @@ export async function ssoLogin(empcloudToken: string, ctx?: SessionContext): Pro
   const { getEmpCloudDB } = await import("../../db/empcloud");
   const empcloudDb = getEmpCloudDB();
   const tokenRow = await empcloudDb("oauth_access_tokens")
-    .where({ jti: decoded.jti })
+    .where({
+      jti: decoded.jti,
+      user_id: userId,
+      organization_id: organizationId,
+      client_id: clientId,
+    })
     .whereNull("revoked_at")
     .where("expires_at", ">", new Date())
     .first();
-  if (!tokenRow) {
+  if (
+    !tokenRow ||
+    Number(tokenRow.user_id) !== userId ||
+    Number(tokenRow.organization_id) !== organizationId ||
+    tokenRow.client_id !== clientId
+  ) {
     throw new UnauthorizedError("Invalid or expired SSO token");
   }
 
   const user = await findUserById(userId);
   if (!user || user.status !== 1) {
     throw new UnauthorizedError("User not found or inactive");
+  }
+  if (user.organization_id !== organizationId) {
+    throw new UnauthorizedError("SSO token organization does not match the user");
   }
 
   const org = await findOrgById(user.organization_id);
@@ -292,7 +307,7 @@ export async function ssoLogin(empcloudToken: string, ctx?: SessionContext): Pro
     empcloudUserId: user.id,
     empcloudOrgId: user.organization_id,
     performanceProfileId: null,
-    role: user.role as AuthPayload["role"],
+    role: normalizeRole(user.role),
     email: user.email,
     firstName: user.first_name,
     lastName: user.last_name,
@@ -353,7 +368,7 @@ export async function refreshToken(
     empcloudUserId: user.id,
     empcloudOrgId: user.organization_id,
     performanceProfileId: null,
-    role: user.role as AuthPayload["role"],
+    role: normalizeRole(user.role),
     email: user.email,
     firstName: user.first_name,
     lastName: user.last_name,
@@ -533,7 +548,7 @@ export async function getProfile(userId: number) {
     emp_code: user.emp_code,
     designation: user.designation,
     contact_number: user.contact_number,
-    role: user.role,
+    role: normalizeRole(user.role),
     org_name: org?.name ?? null,
     date_of_joining: user.date_of_joining,
     has_password: !!user.password,

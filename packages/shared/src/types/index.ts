@@ -154,11 +154,20 @@ export interface PaginatedResponse<T> {
 // Auth
 // ---------------------------------------------------------------------------
 
+export type CanonicalRole =
+  | "super_admin"
+  | "org_admin"
+  | "hr_admin"
+  | "hr_manager"
+  | "manager"
+  | "employee"
+  | "service";
+
 export interface AuthPayload {
   empcloudUserId: number;
   empcloudOrgId: number;
   performanceProfileId: string | null;
-  role: "super_admin" | "org_admin" | "hr_admin" | "hr_manager" | "employee";
+  role: CanonicalRole;
   email: string;
   firstName: string;
   lastName: string;

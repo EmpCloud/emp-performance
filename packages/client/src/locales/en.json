@@ -48,9 +48,12 @@
     "status": { "completed": "Completed", "inProgress": "In Progress", "atRisk": "At Risk", "notStarted": "Not Started", "cancelled": "Cancelled" }
   },
   "roles": {
+    "super_admin": "Super Admin",
     "org_admin": "Org Admin",
     "hr_admin": "HR Admin",
     "hr_manager": "HR Manager",
+    "manager": "Manager",
+    "service": "Service",
     "employee": "Employee"
   },
   "common": {

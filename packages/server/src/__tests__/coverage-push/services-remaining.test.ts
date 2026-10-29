@@ -9,6 +9,7 @@ process.env.EMPCLOUD_URL = "http://localhost:3000";
 process.env.LOG_LEVEL = "error";
 
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
+import type { ActorContext } from "../../security/actor-context";
 
 const mockDB = {
   findOne: vi.fn().mockResolvedValue(null),
@@ -27,7 +28,7 @@ vi.mock("../../db/adapters", () => ({
 vi.mock("../../db/empcloud", () => ({
   initEmpCloudDB: vi.fn(), closeEmpCloudDB: vi.fn(),
   findUserByEmail: vi.fn().mockResolvedValue(null),
-  findUserById: vi.fn().mockResolvedValue({ id: 522, email: "t@t.com", first_name: "Test", last_name: "User", organization_id: 5, role: "employee" }),
+  findUserById: vi.fn().mockResolvedValue({ id: 522, email: "t@t.com", first_name: "Test", last_name: "User", organization_id: 5, role: "employee", status: 1 }),
   findOrgById: vi.fn().mockResolvedValue({ id: 5, name: "TestOrg" }),
 }));
 vi.mock("../../services/email/email.service", () => ({
@@ -43,6 +44,22 @@ vi.mock("../../utils/logger", () => ({
 }));
 
 const ORG = 5;
+const REVIEW_ADMIN_ACTOR: ActorContext = {
+  userId: 100,
+  employeeId: 100,
+  organizationId: ORG,
+  role: "hr_admin",
+  roles: ["hr_admin"],
+  authenticationMethod: "jwt",
+};
+const REVIEWER_ACTOR: ActorContext = {
+  userId: 100,
+  employeeId: 100,
+  organizationId: ORG,
+  role: "employee",
+  roles: ["employee"],
+  authenticationMethod: "jwt",
+};
 beforeEach(() => {
   vi.clearAllMocks();
   mockDB.findOne.mockResolvedValue(null);
@@ -301,7 +318,7 @@ describe("Review Service", () => {
       .mockResolvedValueOnce(null);
     const r = await svc.createReview(ORG, {
       cycle_id: "c1", employee_id: 522, reviewer_id: 100, type: "manager" as any,
-    } as any);
+    } as any, REVIEW_ADMIN_ACTOR);
     expect(r).toHaveProperty("id");
   });
   it("getReview throws for missing", async () => {
@@ -318,10 +335,10 @@ describe("Review Service", () => {
     expect(r).toBeDefined();
   });
   it("saveDraft throws for missing review", async () => {
-    await expect(svc.saveDraft(ORG, "r1", { summary: "Draft" })).rejects.toThrow();
+    await expect(svc.saveDraft(ORG, "r1", { summary: "Draft" }, REVIEWER_ACTOR)).rejects.toThrow();
   });
   it("submitReview throws for missing review", async () => {
-    await expect(svc.submitReview(ORG, "r1", { overall_rating: 4 })).rejects.toThrow();
+    await expect(svc.submitReview(ORG, "r1", { overall_rating: 4, summary: "Summary" }, REVIEWER_ACTOR)).rejects.toThrow();
   });
   it("getReviewsForParticipant returns data", async () => {
     mockDB.raw.mockResolvedValue([[]]);

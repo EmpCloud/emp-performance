@@ -25,6 +25,8 @@ vi.mock("@emp-performance/shared", () => ({
 // Imports
 // ---------------------------------------------------------------------------
 import { authenticate, authorize, AuthPayload } from "../api/middleware/auth.middleware";
+import { actorFromAuthPayload } from "../security/actor-context";
+import { normalizeRole } from "../security/roles";
 import { errorHandler } from "../api/middleware/error.middleware";
 import { rateLimit } from "../api/middleware/rate-limit.middleware";
 import { AppError, NotFoundError, ValidationError, UnauthorizedError, ForbiddenError, ConflictError } from "../utils/errors";
@@ -34,7 +36,16 @@ import { sendSuccess, sendError, sendPaginated } from "../utils/response";
 // Helpers
 // ---------------------------------------------------------------------------
 function mockReq(overrides: any = {}): any {
-  return { headers: {}, params: {}, query: {}, body: {}, ip: "127.0.0.1", ...overrides };
+  return {
+    method: "GET",
+    originalUrl: "/api/v1/test",
+    headers: {},
+    params: {},
+    query: {},
+    body: {},
+    ip: "127.0.0.1",
+    ...overrides,
+  };
 }
 function mockRes(): any {
   const res: any = {};
@@ -62,6 +73,7 @@ describe("Performance Auth Middleware", () => {
       process.env.INTERNAL_SERVICE_SECRET = "secret123";
 
       const req = mockReq({
+        originalUrl: "/api/v1/analytics/overview?organization_id=5",
         headers: { "x-internal-service": "empcloud-dashboard", "x-internal-secret": "secret123" },
         query: { organization_id: "5" },
       });
@@ -69,7 +81,14 @@ describe("Performance Auth Middleware", () => {
       authenticate(req, mockRes(), next);
 
       expect(next).toHaveBeenCalledWith();
-      expect(req.user).toMatchObject({ empcloudOrgId: 5, role: "org_admin", email: "system@empcloud.internal" });
+      expect(req.user).toMatchObject({ empcloudOrgId: 5, role: "service", email: "system@empcloud.internal" });
+      expect(req.actor).toMatchObject({
+        userId: 0,
+        organizationId: 5,
+        role: "service",
+        roles: ["service"],
+        authenticationMethod: "service",
+      });
 
       process.env.INTERNAL_SERVICE_SECRET = original;
     });
@@ -100,14 +119,89 @@ describe("Performance Auth Middleware", () => {
       authenticate(req, mockRes(), next);
       expect(next).toHaveBeenCalledWith();
       expect(req.user.empcloudUserId).toBe(1);
+      expect(req.actor).toMatchObject({
+        userId: 1,
+        organizationId: 2,
+        role: "hr_admin",
+        roles: ["hr_admin"],
+      });
     });
 
-    it("accepts query token", () => {
-      const token = jwt.sign({ empcloudUserId: 3, role: "employee" }, "perf-test-secret");
+    it("preserves the canonical manager role when authenticating a JWT", () => {
+      const token = jwt.sign({
+        empcloudUserId: 7,
+        empcloudOrgId: 2,
+        performanceProfileId: null,
+        role: "manager",
+        email: "manager@t.com",
+        firstName: "M",
+        lastName: "A",
+        orgName: "T",
+      }, "perf-test-secret");
+      const req = mockReq({ headers: { authorization: `Bearer ${token}` } });
+      const next = vi.fn();
+
+      authenticate(req, mockRes(), next);
+
+      expect(next).toHaveBeenCalledWith();
+      expect(req.user.role).toBe("manager");
+      expect(req.actor).toMatchObject({ userId: 7, organizationId: 2, role: "manager" });
+    });
+
+    it("normalizes an unknown JWT role to the least-privileged employee role", () => {
+      const token = jwt.sign({
+        empcloudUserId: 8,
+        empcloudOrgId: 2,
+        performanceProfileId: null,
+        role: "future_admin",
+        email: "unknown@t.com",
+        firstName: "U",
+        lastName: "R",
+        orgName: "T",
+      }, "perf-test-secret");
+      const req = mockReq({ headers: { authorization: `Bearer ${token}` } });
+      const next = vi.fn();
+
+      authenticate(req, mockRes(), next);
+
+      expect(next).toHaveBeenCalledWith();
+      expect(req.user.role).toBe("employee");
+      expect(req.actor.role).toBe("employee");
+    });
+
+    it("rejects bearer tokens in the query string", () => {
+      const token = jwt.sign({
+        empcloudUserId: 3,
+        empcloudOrgId: 2,
+        performanceProfileId: null,
+        role: "employee",
+        email: "employee@t.com",
+        firstName: "E",
+        lastName: "M",
+        orgName: "T",
+      }, "perf-test-secret");
       const req = mockReq({ query: { token } });
       const next = vi.fn();
       authenticate(req, mockRes(), next);
-      expect(next).toHaveBeenCalledWith();
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 401 }));
+    });
+
+    it("rejects a valid internal secret outside the widget endpoint", () => {
+      const original = process.env.INTERNAL_SERVICE_SECRET;
+      process.env.INTERNAL_SERVICE_SECRET = "secret123";
+      const req = mockReq({
+        method: "POST",
+        originalUrl: "/api/v1/reviews",
+        headers: { "x-internal-service": "empcloud-dashboard", "x-internal-secret": "secret123" },
+        query: { organization_id: "5" },
+      });
+      const next = vi.fn();
+
+      authenticate(req, mockRes(), next);
+
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403 }));
+      expect(req.user).toBeUndefined();
+      process.env.INTERNAL_SERVICE_SECRET = original;
     });
 
     it("rejects expired token", () => {
@@ -136,7 +230,10 @@ describe("Performance Auth Middleware", () => {
 
     it("rejects insufficient role", () => {
       const mw = authorize("org_admin");
-      const req = mockReq({ user: { role: "employee" } });
+      const req = mockReq({
+        user: { role: "employee" },
+        actor: { role: "employee", roles: ["employee"] },
+      });
       const next = vi.fn();
       mw(req, mockRes(), next);
       expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403 }));
@@ -144,18 +241,100 @@ describe("Performance Auth Middleware", () => {
 
     it("allows matching role", () => {
       const mw = authorize("hr_admin");
-      const req = mockReq({ user: { role: "hr_admin" } });
+      const req = mockReq({
+        user: { role: "hr_admin" },
+        actor: { role: "hr_admin", roles: ["hr_admin"] },
+      });
       const next = vi.fn();
       mw(req, mockRes(), next);
       expect(next).toHaveBeenCalledWith();
     });
 
-    it("allows any authenticated user when no roles specified", () => {
-      const mw = authorize();
-      const req = mockReq({ user: { role: "employee" } });
+    it("allows a tenant-scoped super admin on an administrative route", () => {
+      const mw = authorize("hr_admin");
+      const req = mockReq({
+        user: { role: "super_admin", empcloudOrgId: 2 },
+        actor: { role: "super_admin", roles: ["super_admin"], organizationId: 2 },
+      });
       const next = vi.fn();
       mw(req, mockRes(), next);
       expect(next).toHaveBeenCalledWith();
+    });
+
+    it("does not let a super admin inherit non-administrative roles", () => {
+      const mw = authorize("service");
+      const req = mockReq({
+        user: { role: "super_admin", empcloudOrgId: 2 },
+        actor: { role: "super_admin", roles: ["super_admin"], organizationId: 2 },
+      });
+      const next = vi.fn();
+      mw(req, mockRes(), next);
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403 }));
+    });
+
+    it("allows any authenticated user when no roles specified", () => {
+      const mw = authorize();
+      const req = mockReq({
+        user: { role: "employee" },
+        actor: { role: "employee", roles: ["employee"] },
+      });
+      const next = vi.fn();
+      mw(req, mockRes(), next);
+      expect(next).toHaveBeenCalledWith();
+    });
+
+    it("uses the canonical actor rather than a conflicting raw user role", () => {
+      const mw = authorize("org_admin");
+      const req = mockReq({
+        user: { role: "org_admin" },
+        actor: { role: "employee", roles: ["employee"] },
+      });
+      const next = vi.fn();
+
+      mw(req, mockRes(), next);
+
+      expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403 }));
+    });
+  });
+});
+
+describe("Canonical actor and role helpers", () => {
+  it.each([
+    ["super_admin", "super_admin"],
+    ["Org Admin", "org_admin"],
+    ["admin", "hr_admin"],
+    ["HR-Manager", "hr_manager"],
+    ["Manager", "manager"],
+    ["employee", "employee"],
+  ])("normalizes %s to %s", (input, expected) => {
+    expect(normalizeRole(input)).toBe(expected);
+  });
+
+  it.each([undefined, null, "", "future_admin"])(
+    "normalizes unknown role %s to employee",
+    (input) => {
+      expect(normalizeRole(input)).toBe("employee");
+    },
+  );
+
+  it("derives a canonical actor from an authenticated payload", () => {
+    const payload: AuthPayload = {
+      empcloudUserId: 42,
+      empcloudOrgId: 9,
+      performanceProfileId: "profile-42",
+      role: "manager",
+      email: "manager@example.com",
+      firstName: "Casey",
+      lastName: "Manager",
+      orgName: "Example",
+    };
+
+    expect(actorFromAuthPayload(payload)).toMatchObject({
+      userId: 42,
+      employeeId: 42,
+      organizationId: 9,
+      role: "manager",
+      roles: ["manager"],
     });
   });
 });

@@ -25,6 +25,7 @@ vi.mock("../../utils/logger", () => ({
 vi.mock("../../config", () => ({
   config: {
     jwt: { secret: "test-secret", accessExpiry: "1h", refreshExpiry: "7d" },
+    sso: { publicKey: "", issuer: undefined, audience: undefined, clientId: "empcloud-dashboard" },
     db: { host: "localhost", port: 3306, user: "root", password: "", name: "test", poolMin: 1, poolMax: 5 },
     empcloudDb: { host: "localhost", port: 3306, user: "root", password: "", name: "empcloud" },
   },
@@ -85,7 +86,7 @@ describe("auth.service", () => {
       const hash = await bcrypt.hash("password", 4);
       mockedFindUserByEmail.mockResolvedValue({
         id: 1, organization_id: 1, first_name: "Test", last_name: "User",
-        email: "test@test.com", password: hash, role: "employee",
+        email: "test@test.com", password: hash, role: "employee", status: 1,
       } as any);
       mockedFindOrgById.mockResolvedValue(null);
       await expect(login("test@test.com", "password")).rejects.toThrow("inactive");
@@ -96,7 +97,7 @@ describe("auth.service", () => {
       const hash = await bcrypt.hash("password", 4);
       mockedFindUserByEmail.mockResolvedValue({
         id: 1, organization_id: 1, first_name: "Test", last_name: "User",
-        email: "test@test.com", password: hash, role: "employee",
+        email: "test@test.com", password: hash, role: "employee", status: 1,
       } as any);
       mockedFindOrgById.mockResolvedValue({ id: 1, name: "Test Org", is_active: false } as any);
       await expect(login("test@test.com", "password")).rejects.toThrow("inactive");
@@ -107,7 +108,7 @@ describe("auth.service", () => {
       const hash = await bcrypt.hash("password", 4);
       mockedFindUserByEmail.mockResolvedValue({
         id: 1, organization_id: 1, first_name: "Test", last_name: "User",
-        email: "test@test.com", password: hash, role: "hr_admin",
+        email: "test@test.com", password: hash, role: "hr_admin", status: 1,
       } as any);
       mockedFindOrgById.mockResolvedValue({ id: 1, name: "Test Org", is_active: true } as any);
 
@@ -115,6 +116,18 @@ describe("auth.service", () => {
       expect(result.user.email).toBe("test@test.com");
       expect(result.tokens.accessToken).toBeTruthy();
       expect(result.tokens.refreshToken).toBeTruthy();
+    });
+
+    it("should reject an inactive user after validating the password", async () => {
+      const bcrypt = await import("bcryptjs");
+      const hash = await bcrypt.hash("password", 4);
+      mockedFindUserByEmail.mockResolvedValue({
+        id: 1, organization_id: 1, first_name: "Test", last_name: "User",
+        email: "test@test.com", password: hash, role: "employee", status: 0,
+      } as any);
+
+      await expect(login("test@test.com", "password")).rejects.toThrow("Account is inactive");
+      expect(mockedFindOrgById).not.toHaveBeenCalled();
     });
   });
 
@@ -156,69 +169,9 @@ describe("auth.service", () => {
   });
 
   describe("ssoLogin", () => {
-    it("should throw for invalid SSO token (non-decodable)", async () => {
-      await expect(ssoLogin("not-a-jwt")).rejects.toThrow("Invalid SSO token");
-    });
-
-    it("should throw if SSO token has no sub", async () => {
-      const jwt = await import("jsonwebtoken");
-      const token = jwt.default.sign({ name: "test" }, "some-secret"); // no sub
-      await expect(ssoLogin(token)).rejects.toThrow("missing user id");
-    });
-
-    it("should throw if user not found", async () => {
-      const jwt = await import("jsonwebtoken");
-      const token = jwt.default.sign({ sub: 123 }, "some-secret");
-      mockedFindUserById.mockResolvedValue(null);
-      await expect(ssoLogin(token)).rejects.toThrow("not found or inactive");
-    });
-
-    it("should throw if user inactive (status != 1)", async () => {
-      const jwt = await import("jsonwebtoken");
-      const token = jwt.default.sign({ sub: 123 }, "some-secret");
-      mockedFindUserById.mockResolvedValue({ id: 123, status: 0, organization_id: 1 } as any);
-      await expect(ssoLogin(token)).rejects.toThrow("not found or inactive");
-    });
-
-    it("should throw if org inactive", async () => {
-      const jwt = await import("jsonwebtoken");
-      const token = jwt.default.sign({ sub: 123 }, "some-secret");
-      mockedFindUserById.mockResolvedValue({
-        id: 123, status: 1, organization_id: 1, first_name: "A", last_name: "B",
-        email: "test@test.com", role: "employee",
-      } as any);
-      mockedFindOrgById.mockResolvedValue(null);
-      await expect(ssoLogin(token)).rejects.toThrow("inactive");
-    });
-
-    it("should return tokens on valid SSO login (no jti)", async () => {
-      const jwt = await import("jsonwebtoken");
-      const token = jwt.default.sign({ sub: 123 }, "some-secret");
-      mockedFindUserById.mockResolvedValue({
-        id: 123, status: 1, organization_id: 1, first_name: "Test", last_name: "User",
-        email: "test@test.com", role: "employee",
-      } as any);
-      mockedFindOrgById.mockResolvedValue({ id: 1, name: "Test Org", is_active: true } as any);
-
-      const result = await ssoLogin(token);
-      expect(result.user.email).toBe("test@test.com");
-      expect(result.tokens.accessToken).toBeTruthy();
-    });
-
-    it("should handle jti validation when empcloud DB throws", async () => {
-      const jwt = await import("jsonwebtoken");
-      const token = jwt.default.sign({ sub: 123, jti: "some-jti" }, "some-secret");
-
-      // The dynamic import of empcloud will use our mock which doesn't have getEmpCloudDB
-      // This should fall through the catch block
-      mockedFindUserById.mockResolvedValue({
-        id: 123, status: 1, organization_id: 1, first_name: "Test", last_name: "User",
-        email: "test@test.com", role: "employee",
-      } as any);
-      mockedFindOrgById.mockResolvedValue({ id: 1, name: "Test Org", is_active: true } as any);
-
-      const result = await ssoLogin(token);
-      expect(result.tokens.accessToken).toBeTruthy();
+    it("fails closed when the RS256 verification key is not configured", async () => {
+      await expect(ssoLogin("untrusted-token")).rejects.toThrow("SSO is not configured");
+      expect(mockedFindUserById).not.toHaveBeenCalled();
     });
   });
 

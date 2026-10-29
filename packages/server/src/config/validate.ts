@@ -12,6 +12,9 @@ export function validateConfig(): void {
   if (config.jwt.secret.length < 16) {
     warnings.push("JWT_SECRET should be at least 16 characters");
   }
+  if (config.env === "production" && !config.sso.publicKey) {
+    errors.push("EMPCLOUD_SSO_PUBLIC_KEY is required in production");
+  }
 
   // Database
   if (!config.db.host) errors.push("DB_HOST is required");
