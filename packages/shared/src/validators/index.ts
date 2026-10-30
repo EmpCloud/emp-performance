@@ -83,6 +83,20 @@ export const addParticipantsSchema = z.object({
   ).min(1),
 });
 
+export const calibrationDecisionSchema = z.object({
+  rating: z.coerce.number().min(1).max(5),
+  reason: z.string().trim().min(10).max(2000),
+});
+
+export const calibrationParticipantParamSchema = z.object({
+  id: z.string().uuid(),
+  participantId: z.string().uuid(),
+});
+
+export const transitionReviewCycleSchema = z.object({
+  status: z.enum([ReviewCycleStatus.IN_REVIEW, ReviewCycleStatus.CALIBRATION]),
+});
+
 // ---------------------------------------------------------------------------
 // Reviews
 // ---------------------------------------------------------------------------

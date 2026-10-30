@@ -94,9 +94,67 @@ const spec = {
     "/api/v1/review-cycles/{id}/close": {
       post: {
         tags: ["Review Cycles"],
-        summary: "Close a review cycle",
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
-        responses: { "200": { description: "Cycle closed" } },
+        summary: "Release finalized calibration ratings and complete a cycle",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: { "200": { description: "Ratings released and cycle completed" } },
+      },
+    },
+    "/api/v1/review-cycles/{id}/transition": {
+      post: {
+        tags: ["Review Cycles"],
+        summary: "Move a cycle to the next controlled workflow stage",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["status"],
+                properties: { status: { type: "string", enum: ["in_review", "calibration"] } },
+              },
+            },
+          },
+        },
+        responses: { "200": { description: "Cycle stage updated" } },
+      },
+    },
+    "/api/v1/review-cycles/{id}/calibration": {
+      get: {
+        tags: ["Review Cycles"],
+        summary: "Get the tenant-scoped calibration roster",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: { "200": { description: "Calibration roster with baseline and effective ratings" } },
+      },
+    },
+    "/api/v1/review-cycles/{id}/calibration/{participantId}": {
+      put: {
+        tags: ["Review Cycles"],
+        summary: "Append a versioned calibration adjustment",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "participantId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+        ],
+        responses: { "201": { description: "Calibration decision recorded" } },
+      },
+    },
+    "/api/v1/review-cycles/{id}/calibration/{participantId}/history": {
+      get: {
+        tags: ["Review Cycles"],
+        summary: "Get immutable calibration decision history",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "participantId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+        ],
+        responses: { "200": { description: "Decision history, newest first" } },
+      },
+    },
+    "/api/v1/review-cycles/{id}/calibration/finalize": {
+      post: {
+        tags: ["Review Cycles"],
+        summary: "Freeze the calibration roster before release",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: { "200": { description: "Calibration finalized" } },
       },
     },
     "/api/v1/review-cycles/{id}/participants": {

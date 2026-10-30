@@ -13,7 +13,6 @@ import {
   Trash2,
   Eye,
   PlayCircle,
-  CheckCircle2,
 } from "lucide-react";
 import { apiGet, apiDelete, apiPost } from "@/api/client";
 import { useConfirm } from "@/components/ConfirmDialog";
@@ -35,7 +34,7 @@ const STATUS_BADGE: Record<string, string> = {
   cancelled: "bg-red-100 text-red-700",
 };
 
-const STATUS_TABS = ["", "draft", "active", "in_review", "completed"];
+const STATUS_TABS = ["", "draft", "active", "in_review", "calibration", "completed"];
 
 type CycleWithCount = ReviewCycle & { participant_count: number };
 
@@ -62,6 +61,7 @@ export function ReviewCycleListPage() {
     draft: t("reviewCycleList.tabDraft"),
     active: t("reviewCycleList.tabActive"),
     in_review: t("reviewCycleList.tabInReview"),
+    calibration: t("reviewCycleList.statusCalibration"),
     completed: t("reviewCycleList.tabCompleted"),
   };
   const [searchParams, setSearchParams] = useSearchParams();
@@ -138,16 +138,6 @@ export function ReviewCycleListPage() {
     },
     onError: (err: any) =>
       toast.error(err.response?.data?.error?.message || t("reviewCycleList.toastLaunchFailed")),
-  });
-
-  const closeMutation = useMutation({
-    mutationFn: (id: string) => apiPost(`/review-cycles/${id}/close`, {}),
-    onSuccess: () => {
-      toast.success(t("reviewCycleList.toastCycleClosed"));
-      refresh();
-    },
-    onError: (err: any) =>
-      toast.error(err.response?.data?.error?.message || t("reviewCycleList.toastCloseFailed")),
   });
 
   const deleteMutation = useMutation({
@@ -341,19 +331,6 @@ export function ReviewCycleListPage() {
                           >
                             <PlayCircle className="h-4 w-4 text-green-600" />
                             {t("reviewCycleList.menuLaunchCycle")}
-                          </button>
-                        )}
-                        {cycle.status === "active" && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setOpenMenuId(null);
-                              closeMutation.mutate(cycle.id);
-                            }}
-                            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                          >
-                            <CheckCircle2 className="h-4 w-4 text-indigo-600" />
-                            {t("reviewCycleList.menuCloseCycle")}
                           </button>
                         )}
                         {cycle.status === "draft" && (

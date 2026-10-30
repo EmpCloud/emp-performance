@@ -8,6 +8,8 @@ import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { IDBAdapter, QueryOptions, QueryResult, TransactionContext } from "./interface";
 
+type DbExecutor = Knex | Knex.Transaction;
+
 export class KnexAdapter implements IDBAdapter {
   private db: Knex | null = null;
   private config: Knex.Config;
@@ -66,10 +68,13 @@ export class KnexAdapter implements IDBAdapter {
   }
 
   /** Check whether a table has a specific column (cached per table). */
-  private async hasColumn(table: string, column: string): Promise<boolean> {
+  private async hasColumn(
+    table: string,
+    column: string,
+    executor: DbExecutor = this.getDb()
+  ): Promise<boolean> {
     if (!this.tableColumns.has(table)) {
-      const db = this.getDb();
-      const cols = await db(table).columnInfo();
+      const cols = await executor(table).columnInfo();
       this.tableColumns.set(table, new Set(Object.keys(cols)));
     }
     return this.tableColumns.get(table)!.has(column);
@@ -89,18 +94,30 @@ export class KnexAdapter implements IDBAdapter {
   }
 
   // CRUD
-  async findById<T>(table: string, id: string): Promise<T | null> {
-    const row = await this.getDb()(table).where({ id }).first();
+  async findById<T>(
+    table: string,
+    id: string,
+    executor: DbExecutor = this.getDb()
+  ): Promise<T | null> {
+    const row = await executor(table).where({ id }).first();
     return (row as T) || null;
   }
 
-  async findOne<T>(table: string, where: Record<string, any>): Promise<T | null> {
-    const row = await this.getDb()(table).where(where).first();
+  async findOne<T>(
+    table: string,
+    where: Record<string, any>,
+    executor: DbExecutor = this.getDb()
+  ): Promise<T | null> {
+    const row = await executor(table).where(where).first();
     return (row as T) || null;
   }
 
-  async findMany<T>(table: string, options?: QueryOptions): Promise<QueryResult<T>> {
-    const db = this.getDb();
+  async findMany<T>(
+    table: string,
+    options?: QueryOptions,
+    executor: DbExecutor = this.getDb()
+  ): Promise<QueryResult<T>> {
+    const db = executor;
     const page = options?.page || 1;
     const limit = options?.limit || 20;
     const offset = (page - 1) * limit;
@@ -161,7 +178,11 @@ export class KnexAdapter implements IDBAdapter {
     };
   }
 
-  async create<T>(table: string, data: Partial<T>): Promise<T> {
+  async create<T>(
+    table: string,
+    data: Partial<T>,
+    executor: DbExecutor = this.getDb()
+  ): Promise<T> {
     const id = (data as any).id || uuidv4();
     const now = new Date();
     const record: Record<string, any> = {
@@ -170,17 +191,21 @@ export class KnexAdapter implements IDBAdapter {
       created_at: now,
     };
 
-    if (await this.hasColumn(table, "updated_at")) {
+    if (await this.hasColumn(table, "updated_at", executor)) {
       record.updated_at = now;
     }
 
-    await this.getDb()(table).insert(record);
-    return this.findById<T>(table, id) as Promise<T>;
+    await executor(table).insert(record);
+    return this.findById<T>(table, id, executor) as Promise<T>;
   }
 
-  async createMany<T>(table: string, data: Partial<T>[]): Promise<T[]> {
+  async createMany<T>(
+    table: string,
+    data: Partial<T>[],
+    executor: DbExecutor = this.getDb()
+  ): Promise<T[]> {
     const now = new Date();
-    const hasUpdatedAt = await this.hasColumn(table, "updated_at");
+    const hasUpdatedAt = await this.hasColumn(table, "updated_at", executor);
     const records = data.map((d) => {
       const rec: Record<string, any> = {
         ...d,
@@ -191,53 +216,80 @@ export class KnexAdapter implements IDBAdapter {
       return rec;
     });
 
-    await this.getDb().batchInsert(table, records as any[], 500);
+    await executor.batchInsert(table, records as any[], 500);
     const ids = records.map((r) => r.id);
-    return this.getDb()(table).whereIn("id", ids);
+    return executor(table).whereIn("id", ids);
   }
 
-  async update<T>(table: string, id: string, data: Partial<T>): Promise<T> {
+  async update<T>(
+    table: string,
+    id: string,
+    data: Partial<T>,
+    executor: DbExecutor = this.getDb()
+  ): Promise<T> {
     const record: Record<string, any> = { ...data };
     delete record.id;
     delete record.created_at;
 
-    if (await this.hasColumn(table, "updated_at")) {
+    if (await this.hasColumn(table, "updated_at", executor)) {
       record.updated_at = new Date();
     }
 
-    await this.getDb()(table).where({ id }).update(record);
-    return this.findById<T>(table, id) as Promise<T>;
+    await executor(table).where({ id }).update(record);
+    return this.findById<T>(table, id, executor) as Promise<T>;
   }
 
-  async updateMany(table: string, where: Record<string, any>, data: Record<string, any>): Promise<number> {
+  async updateMany(
+    table: string,
+    where: Record<string, any>,
+    data: Record<string, any>,
+    executor: DbExecutor = this.getDb()
+  ): Promise<number> {
     const record: Record<string, any> = { ...data };
-    if (await this.hasColumn(table, "updated_at")) {
+    if (await this.hasColumn(table, "updated_at", executor)) {
       record.updated_at = new Date();
     }
-    return this.getDb()(table)
+    return executor(table)
       .where(where)
       .update(record);
   }
 
-  async delete(table: string, id: string): Promise<boolean> {
-    const count = await this.getDb()(table).where({ id }).del();
+  async delete(
+    table: string,
+    id: string,
+    executor: DbExecutor = this.getDb()
+  ): Promise<boolean> {
+    const count = await executor(table).where({ id }).del();
     return count > 0;
   }
 
-  async deleteMany(table: string, where: Record<string, any>): Promise<number> {
-    return this.getDb()(table).where(where).del();
+  async deleteMany(
+    table: string,
+    where: Record<string, any>,
+    executor: DbExecutor = this.getDb()
+  ): Promise<number> {
+    return executor(table).where(where).del();
   }
 
   // Aggregations
-  async count(table: string, where?: Record<string, any>): Promise<number> {
-    let query = this.getDb()(table);
+  async count(
+    table: string,
+    where?: Record<string, any>,
+    executor: DbExecutor = this.getDb()
+  ): Promise<number> {
+    let query = executor(table);
     if (where) query = query.where(where);
     const [{ count }] = await query.count("* as count");
     return Number(count);
   }
 
-  async sum(table: string, field: string, where?: Record<string, any>): Promise<number> {
-    let query = this.getDb()(table);
+  async sum(
+    table: string,
+    field: string,
+    where?: Record<string, any>,
+    executor: DbExecutor = this.getDb()
+  ): Promise<number> {
+    let query = executor(table);
     if (where) query = query.where(where);
     const [{ total }] = await query.sum(`${field} as total`);
     return Number(total) || 0;
@@ -248,16 +300,43 @@ export class KnexAdapter implements IDBAdapter {
     const db = this.getDb();
     return db.transaction(async (trx) => {
       const ctx: TransactionContext = {
-        commit: async () => { await trx.commit(); },
-        rollback: async () => { await trx.rollback(); },
+        findById: <R>(table: string, id: string) => this.findById<R>(table, id, trx),
+        findOne: <R>(table: string, where: Record<string, any>) =>
+          this.findOne<R>(table, where, trx),
+        findMany: <R>(table: string, options?: QueryOptions) =>
+          this.findMany<R>(table, options, trx),
+        create: <R>(table: string, data: Partial<R>) => this.create<R>(table, data, trx),
+        createMany: <R>(table: string, data: Partial<R>[]) =>
+          this.createMany<R>(table, data, trx),
+        update: <R>(table: string, id: string, data: Partial<R>) =>
+          this.update<R>(table, id, data, trx),
+        updateMany: (table: string, where: Record<string, any>, data: Record<string, any>) =>
+          this.updateMany(table, where, data, trx),
+        delete: (table: string, id: string) => this.delete(table, id, trx),
+        deleteMany: (table: string, where: Record<string, any>) =>
+          this.deleteMany(table, where, trx),
+        count: (table: string, where?: Record<string, any>) => this.count(table, where, trx),
+        sum: (table: string, field: string, where?: Record<string, any>) =>
+          this.sum(table, field, where, trx),
+        raw: <R>(query: string, params?: any[]) => this.raw<R>(query, params, trx),
+        commit: async () => {
+          if (!trx.isCompleted()) await trx.commit();
+        },
+        rollback: async () => {
+          if (!trx.isCompleted()) await trx.rollback();
+        },
       };
       return fn(ctx);
     });
   }
 
   // Raw
-  async raw<T>(query: string, params?: any[]): Promise<T> {
-    const result = await this.getDb().raw(query, params || []);
+  async raw<T>(
+    query: string,
+    params?: any[],
+    executor: DbExecutor = this.getDb()
+  ): Promise<T> {
+    const result = await executor.raw(query, params || []);
     return result as T;
   }
 }

@@ -226,6 +226,8 @@ export interface ReviewCycle {
   framework_id: string | null;
   description: string | null;
   created_by: number;
+  calibration_finalized_at: string | null;
+  calibration_finalized_by: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -236,7 +238,45 @@ export interface ReviewCycleParticipant {
   employee_id: number;
   manager_id: number | null;
   status: string;
+  final_rating: number | null;
   created_at: string;
+}
+
+/**
+ * Immutable calibration adjustment. Each correction creates a new version so
+ * the released performance rating has a complete, reviewable audit trail.
+ */
+export interface CalibrationDecision {
+  id: string;
+  organization_id: number;
+  cycle_id: string;
+  participant_id: string;
+  employee_id: number;
+  baseline_rating: number;
+  calibrated_rating: number;
+  reason: string;
+  version: number;
+  decided_by: number;
+  created_at: string;
+}
+
+export interface CalibrationParticipant {
+  participant_id: string;
+  employee_id: number;
+  employee_name: string | null;
+  baseline_rating: number | null;
+  calibrated_rating: number | null;
+  final_rating: number | null;
+  has_decision: boolean;
+  latest_decision: CalibrationDecision | null;
+}
+
+export interface CalibrationRoster {
+  cycle_id: string;
+  status: ReviewCycleStatus;
+  finalized_at: string | null;
+  finalized_by: number | null;
+  participants: CalibrationParticipant[];
 }
 
 export interface Review {

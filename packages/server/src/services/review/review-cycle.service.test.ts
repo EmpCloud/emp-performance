@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockFindUserById } = vi.hoisted(() => ({
+const { mockFindUserById, mockGetFinalizedCalibrationRatings } = vi.hoisted(() => ({
   mockFindUserById: vi.fn(),
+  mockGetFinalizedCalibrationRatings: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -14,9 +15,13 @@ const mockDB = {
   findMany: vi.fn(),
   findById: vi.fn(),
   update: vi.fn(),
+  updateMany: vi.fn(),
   delete: vi.fn(),
+  deleteMany: vi.fn(),
+  createMany: vi.fn(),
   count: vi.fn(),
   raw: vi.fn(),
+  transaction: vi.fn(),
 };
 
 vi.mock("../../db/adapters", () => ({
@@ -25,6 +30,10 @@ vi.mock("../../db/adapters", () => ({
 
 vi.mock("../../db/empcloud", () => ({
   findUserById: mockFindUserById,
+}));
+
+vi.mock("./calibration.service", () => ({
+  getFinalizedCalibrationRatings: mockGetFinalizedCalibrationRatings,
 }));
 
 vi.mock("../../utils/logger", () => ({
@@ -42,6 +51,7 @@ import {
   reopenCycle,
   removeParticipant,
   updateCycle,
+  buildRatingDistribution,
 } from "./review-cycle.service";
 
 // ---------------------------------------------------------------------------
@@ -76,6 +86,9 @@ function makeCycle(overrides: Record<string, any> = {}) {
 describe("review-cycle.service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDB.transaction.mockImplementation(async (fn: (trx: typeof mockDB) => Promise<unknown>) =>
+      fn(mockDB),
+    );
     mockFindUserById.mockImplementation(async (id: number) => ({
       id,
       organization_id: ORG_ID,
@@ -312,70 +325,82 @@ describe("review-cycle.service", () => {
   // closeCycle
   // -------------------------------------------------------------------------
   describe("closeCycle", () => {
-    it("should close an active cycle and compute final ratings", async () => {
-      mockDB.findOne.mockResolvedValue(makeCycle({ status: "active" }));
-      mockDB.findMany
-        .mockResolvedValueOnce({
-          data: [{ id: "p-1", employee_id: 100, manager_id: 200, cycle_id: "cycle-1" }],
-          total: 1,
-          page: 1,
-          limit: 1000,
-          totalPages: 1,
-        }) // participants
-        .mockResolvedValueOnce({
-          data: [
-            { employee_id: 100, reviewer_id: 100, type: "self", overall_rating: 4, status: "submitted" },
-            { employee_id: 100, reviewer_id: 200, type: "manager", overall_rating: 5, status: "submitted" },
-          ],
-          total: 2,
-          page: 1,
-          limit: 1000,
-          totalPages: 1,
-        }) // all cycle reviews
-        .mockResolvedValueOnce({ data: [] }) // submitted reviews for distribution
-        .mockResolvedValueOnce({ data: [] }); // prior distribution rows
+    it("should atomically release a finalized calibration", async () => {
+      mockDB.findOne.mockResolvedValue(
+        makeCycle({
+          status: "calibration",
+          calibration_finalized_at: "2026-03-31T12:00:00.000Z",
+          calibration_finalized_by: USER_ID,
+        }),
+      );
+      mockGetFinalizedCalibrationRatings.mockResolvedValue([
+        {
+          participant_id: "p-1",
+          employee_id: 100,
+          baseline_rating: 4.5,
+          calibrated_rating: 4.25,
+          decision_id: "decision-1",
+          decision_version: 1,
+        },
+      ]);
 
       mockDB.update
         .mockResolvedValueOnce({}) // participant update
         .mockResolvedValueOnce(makeCycle({ status: "completed" })); // cycle update
+      mockDB.create.mockResolvedValue({});
 
-      const result = await closeCycle(ORG_ID, "cycle-1");
+      const result = await closeCycle(ORG_ID, "cycle-1", USER_ID);
 
       expect(mockDB.update).toHaveBeenCalledWith(
         "review_cycle_participants",
         "p-1",
-        expect.objectContaining({ status: "completed" }),
+        expect.objectContaining({ final_rating: 4.25, status: "completed" }),
+      );
+      expect(mockDB.transaction).toHaveBeenCalledOnce();
+      expect(mockDB.create).toHaveBeenCalledWith(
+        "audit_logs",
+        expect.objectContaining({
+          user_id: USER_ID,
+          action: "review_cycle.ratings_released",
+        }),
       );
       expect(result.status).toBe("completed");
     });
 
-    it("should reject close while a required manager review is incomplete", async () => {
-      mockDB.findOne.mockResolvedValue(makeCycle({ status: "active" }));
-      mockDB.findMany
-        .mockResolvedValueOnce({
-          data: [{ id: "p-1", employee_id: 100, manager_id: 200, cycle_id: "cycle-1" }],
-        })
-        .mockResolvedValueOnce({
-          data: [
-            { employee_id: 100, reviewer_id: 100, type: "self", status: "submitted" },
-            { employee_id: 100, reviewer_id: 200, type: "manager", status: "draft" },
-          ],
-        });
+    it("should reject release until calibration is finalized", async () => {
+      mockDB.findOne.mockResolvedValue(makeCycle({ status: "calibration" }));
+      mockGetFinalizedCalibrationRatings.mockRejectedValue(
+        new Error("Calibration must be finalized before ratings are released"),
+      );
 
-      await expect(closeCycle(ORG_ID, "cycle-1")).rejects.toThrow("required review");
+      await expect(closeCycle(ORG_ID, "cycle-1", USER_ID)).rejects.toThrow(
+        "Calibration must be finalized",
+      );
       expect(mockDB.update).not.toHaveBeenCalled();
     });
 
     it("should reject closing a draft cycle", async () => {
       mockDB.findOne.mockResolvedValue(makeCycle({ status: "draft" }));
 
-      await expect(closeCycle(ORG_ID, "cycle-1")).rejects.toThrow();
+      await expect(closeCycle(ORG_ID, "cycle-1", USER_ID)).rejects.toThrow();
     });
 
     it("should reject closing a completed cycle", async () => {
       mockDB.findOne.mockResolvedValue(makeCycle({ status: "completed" }));
 
-      await expect(closeCycle(ORG_ID, "cycle-1")).rejects.toThrow();
+      await expect(closeCycle(ORG_ID, "cycle-1", USER_ID)).rejects.toThrow();
+    });
+  });
+
+  describe("buildRatingDistribution", () => {
+    it("counts one final rating per participant and returns all five buckets", () => {
+      expect(buildRatingDistribution([1.4, 3.6, 3.9])).toEqual([
+        { rating: 1, count: 1, percentage: 33.33 },
+        { rating: 2, count: 0, percentage: 0 },
+        { rating: 3, count: 0, percentage: 0 },
+        { rating: 4, count: 2, percentage: 66.67 },
+        { rating: 5, count: 0, percentage: 0 },
+      ]);
     });
   });
 
@@ -510,7 +535,7 @@ describe("review-cycle.service", () => {
       mockDB.findOne.mockResolvedValue(makeCycle({ status: "active" }));
       mockDB.update.mockResolvedValue(makeCycle({ status: "in_review" }));
 
-      const result = await transitionCycle(ORG_ID, "cycle-1", "in_review");
+      const result = await transitionCycle(ORG_ID, "cycle-1", "in_review", USER_ID);
 
       expect(result.status).toBe("in_review");
     });
@@ -518,9 +543,68 @@ describe("review-cycle.service", () => {
     it("should reject backward transitions", async () => {
       mockDB.findOne.mockResolvedValue(makeCycle({ status: "in_review" }));
 
-      await expect(transitionCycle(ORG_ID, "cycle-1", "active"))
+      await expect(transitionCycle(ORG_ID, "cycle-1", "active", USER_ID))
         .rejects.toThrow("Cannot move");
       expect(mockDB.update).not.toHaveBeenCalled();
+    });
+
+    it("blocks calibration until required reviews have valid submitted ratings", async () => {
+      mockDB.findOne.mockResolvedValue(makeCycle({ status: "in_review" }));
+      mockDB.findMany
+        .mockResolvedValueOnce({
+          data: [{ id: "p-1", employee_id: 100, manager_id: 200 }],
+        })
+        .mockResolvedValueOnce({
+          data: [
+            {
+              employee_id: 100,
+              reviewer_id: 100,
+              type: "self",
+              status: "submitted",
+              overall_rating: 4,
+            },
+          ],
+        });
+
+      await expect(
+        transitionCycle(ORG_ID, "cycle-1", "calibration", USER_ID),
+      ).rejects.toThrow("required review assignment");
+      expect(mockDB.update).not.toHaveBeenCalled();
+    });
+
+    it("moves a complete review set into calibration and audits the transition", async () => {
+      mockDB.findOne.mockResolvedValue(makeCycle({ status: "in_review" }));
+      mockDB.findMany
+        .mockResolvedValueOnce({
+          data: [{ id: "p-1", employee_id: 100, manager_id: 200 }],
+        })
+        .mockResolvedValueOnce({
+          data: [
+            {
+              employee_id: 100,
+              reviewer_id: 100,
+              type: "self",
+              status: "submitted",
+              overall_rating: 4,
+            },
+            {
+              employee_id: 100,
+              reviewer_id: 200,
+              type: "manager",
+              status: "submitted",
+              overall_rating: 4.5,
+            },
+          ],
+        });
+      mockDB.update.mockResolvedValue(makeCycle({ status: "calibration" }));
+
+      await expect(
+        transitionCycle(ORG_ID, "cycle-1", "calibration", USER_ID),
+      ).resolves.toMatchObject({ status: "calibration" });
+      expect(mockDB.create).toHaveBeenCalledWith(
+        "audit_logs",
+        expect.objectContaining({ action: "review_cycle.status_transitioned" }),
+      );
     });
   });
 

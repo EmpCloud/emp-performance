@@ -1,7 +1,9 @@
 import { v4 as uuidv4 } from "uuid";
 import { getDB } from "../../db/adapters";
-import { NotFoundError, ValidationError, AppError } from "../../utils/errors";
+import type { IDataContext } from "../../db/adapters/interface";
+import { NotFoundError, ValidationError } from "../../utils/errors";
 import { findUserById } from "../../db/empcloud";
+import { getFinalizedCalibrationRatings } from "./calibration.service";
 import type {
   CompetencyFramework,
   ReviewCycle,
@@ -450,76 +452,80 @@ export async function generateReviewsForCycle(
   return created;
 }
 
-export async function closeCycle(orgId: number, id: string): Promise<ReviewCycle> {
+export async function closeCycle(
+  orgId: number,
+  id: string,
+  releasedBy: number,
+): Promise<ReviewCycle> {
   const db = getDB();
   const cycle = await db.findOne<ReviewCycle>("review_cycles", {
     id,
     organization_id: orgId,
   });
   if (!cycle) throw new NotFoundError("ReviewCycle", id);
-  if (cycle.status !== "active" && cycle.status !== "in_review" && cycle.status !== "calibration") {
-    throw new ValidationError("Only active, in_review, or calibration cycles can be closed");
+  if (cycle.status !== "calibration") {
+    throw new ValidationError("Only a cycle in calibration can be released");
   }
 
-  // Compute average final ratings for each participant (from submitted reviews)
-  const participants = await db.findMany<ReviewCycleParticipant>("review_cycle_participants", {
-    filters: { cycle_id: id },
-    limit: 100000,
-  });
+  // Finalization freezes the append-only calibration inputs. Fetching them
+  // before the transaction is safe because further decisions are rejected
+  // after calibration_finalized_at is set.
+  const finalRatings = await getFinalizedCalibrationRatings(orgId, id);
+  const distribution = buildRatingDistribution(
+    finalRatings.map((rating) => rating.calibrated_rating),
+  );
 
-  const cycleReviews = await db.findMany<Review>("reviews", {
-    filters: { cycle_id: id, organization_id: orgId },
-    limit: 100000,
-  });
-
-  const incompleteAssignments: string[] = [];
-  for (const participant of participants.data) {
-    const required = [
-      { type: "self", reviewerId: participant.employee_id },
-      ...(participant.manager_id
-        ? [{ type: "manager", reviewerId: participant.manager_id }]
-        : []),
-    ];
-    for (const assignment of required) {
-      const submitted = cycleReviews.data.some(
-        (review) =>
-          review.employee_id === participant.employee_id &&
-          review.reviewer_id === assignment.reviewerId &&
-          review.type === assignment.type &&
-          review.status === "submitted",
+  const closedCycle = await db.transaction(async (trx) => {
+    // Re-check the release boundary inside the transaction so concurrent close
+    // requests cannot both publish a cycle.
+    await trx.raw(
+      "SELECT id FROM review_cycles WHERE id = ? AND organization_id = ? FOR UPDATE",
+      [id, orgId],
+    );
+    const current = await trx.findOne<ReviewCycle>("review_cycles", {
+      id,
+      organization_id: orgId,
+    });
+    if (!current) throw new NotFoundError("ReviewCycle", id);
+    if (current.status !== "calibration" || !current.calibration_finalized_at) {
+      throw new ValidationError(
+        "Calibration must be finalized before the cycle can be released",
       );
-      if (!submitted) {
-        incompleteAssignments.push(`${participant.employee_id}:${assignment.type}`);
-      }
     }
-  }
-  if (incompleteAssignments.length > 0) {
-    throw new ValidationError(
-      `Cannot close cycle while ${incompleteAssignments.length} required review assignment(s) are incomplete`,
-    );
-  }
 
-  for (const participant of participants.data) {
-    const reviews = cycleReviews.data.filter(
-      (review) =>
-        review.employee_id === participant.employee_id && review.status === "submitted",
-    );
-
-    if (reviews.length > 0) {
-      const totalRating = reviews.reduce((sum, r) => sum + (Number(r.overall_rating) || 0), 0);
-      const avgRating = Math.round((totalRating / reviews.length) * 100) / 100;
-      await db.update("review_cycle_participants", participant.id, {
-        final_rating: avgRating,
+    for (const rating of finalRatings) {
+      await trx.update("review_cycle_participants", rating.participant_id, {
+        final_rating: rating.calibrated_rating,
         status: "completed",
       } as any);
     }
-  }
 
-  // Persist the rating distribution snapshot so analytics/exports can read it
-  // back without recomputing over thousands of reviews on every request (#R11).
-  await persistRatingDistribution(orgId, id);
+    await persistRatingDistribution(trx, orgId, id, distribution);
 
-  const closedCycle = await db.update<ReviewCycle>("review_cycles", id, { status: "completed" } as any);
+    const released = await trx.update<ReviewCycle>("review_cycles", id, {
+      status: "completed",
+    } as any);
+
+    await trx.create("audit_logs", {
+      id: uuidv4(),
+      organization_id: orgId,
+      user_id: releasedBy,
+      action: "review_cycle.ratings_released",
+      entity_type: "review_cycle",
+      entity_id: id,
+      old_values: JSON.stringify({ status: current.status }),
+      new_values: JSON.stringify({
+        status: "completed",
+        calibration_finalized_at: current.calibration_finalized_at,
+        participant_count: finalRatings.length,
+        distribution,
+      }),
+      ip_address: null,
+      user_agent: null,
+    } as any);
+
+    return released;
+  });
 
   // Notify EMP Cloud about the cycle completion (non-blocking)
   const webhookUrl = process.env.EMPCLOUD_WEBHOOK_URL;
@@ -532,7 +538,7 @@ export async function closeCycle(orgId: number, id: string): Promise<ReviewCycle
         data: {
           cycleId: id,
           cycleName: cycle.name,
-          participantCount: participants.data.length,
+          participantCount: finalRatings.length,
         },
         source: "emp-performance",
         timestamp: new Date().toISOString(),
@@ -555,22 +561,97 @@ export async function transitionCycle(
   orgId: number,
   id: string,
   toStatus: "in_review" | "calibration",
+  transitionedBy: number,
 ): Promise<ReviewCycle> {
   const db = getDB();
-  const cycle = await db.findOne<ReviewCycle>("review_cycles", {
-    id,
-    organization_id: orgId,
-  });
-  if (!cycle) throw new NotFoundError("ReviewCycle", id);
-
-  const allowed = FORWARD_TRANSITIONS[cycle.status] ?? [];
-  if (!allowed.includes(toStatus)) {
-    throw new ValidationError(
-      `Cannot move a '${cycle.status}' cycle to '${toStatus}'`,
+  return db.transaction(async (trx) => {
+    await trx.raw(
+      "SELECT id FROM review_cycles WHERE id = ? AND organization_id = ? FOR UPDATE",
+      [id, orgId],
     );
+    const cycle = await trx.findOne<ReviewCycle>("review_cycles", {
+      id,
+      organization_id: orgId,
+    });
+    if (!cycle) throw new NotFoundError("ReviewCycle", id);
+
+    const allowed = FORWARD_TRANSITIONS[cycle.status] ?? [];
+    if (!allowed.includes(toStatus)) {
+      throw new ValidationError(
+        `Cannot move a '${cycle.status}' cycle to '${toStatus}'`,
+      );
+    }
+
+    if (toStatus === "calibration") {
+      await assertRequiredReviewsReady(trx, orgId, id);
+    }
+
+    const transitioned = await trx.update<ReviewCycle>("review_cycles", id, {
+      status: toStatus,
+    } as any);
+    await trx.create("audit_logs", {
+      id: uuidv4(),
+      organization_id: orgId,
+      user_id: transitionedBy,
+      action: "review_cycle.status_transitioned",
+      entity_type: "review_cycle",
+      entity_id: id,
+      old_values: JSON.stringify({ status: cycle.status }),
+      new_values: JSON.stringify({ status: toStatus }),
+      ip_address: null,
+      user_agent: null,
+    } as any);
+
+    return transitioned;
+  });
+}
+
+async function assertRequiredReviewsReady(
+  db: IDataContext,
+  orgId: number,
+  cycleId: string,
+): Promise<void> {
+  const [participants, reviews] = await Promise.all([
+    db.findMany<ReviewCycleParticipant>("review_cycle_participants", {
+      filters: { cycle_id: cycleId },
+      limit: 100000,
+    }),
+    db.findMany<Review>("reviews", {
+      filters: { organization_id: orgId, cycle_id: cycleId },
+      limit: 100000,
+    }),
+  ]);
+
+  const incomplete: string[] = [];
+  for (const participant of participants.data) {
+    const required = [
+      { type: "self", reviewerId: participant.employee_id },
+      ...(participant.manager_id
+        ? [{ type: "manager", reviewerId: participant.manager_id }]
+        : []),
+    ];
+    for (const assignment of required) {
+      const valid = reviews.data.some((review) => {
+        const rating = Number(review.overall_rating);
+        return (
+          review.employee_id === participant.employee_id &&
+          review.reviewer_id === assignment.reviewerId &&
+          review.type === assignment.type &&
+          review.status === "submitted" &&
+          Number.isFinite(rating) &&
+          rating >= 1 &&
+          rating <= 5
+        );
+      });
+      if (!valid) incomplete.push(`${participant.employee_id}:${assignment.type}`);
+    }
   }
 
-  return db.update<ReviewCycle>("review_cycles", id, { status: toStatus } as any);
+  if (participants.data.length === 0 || incomplete.length > 0) {
+    throw new ValidationError(
+      `Cannot start calibration while ${Math.max(incomplete.length, 1)} required review assignment(s) are incomplete or invalid`,
+    );
+  }
 }
 
 // Completed cycles are the feedback-release boundary. Reopening would make
@@ -843,28 +924,51 @@ export async function getRatingsDistribution(
   return computeRatingDistribution(orgId, cycleId);
 }
 
-// Compute the live 1-5 bell-curve distribution from submitted reviews.
+// Compute the live 1-5 bell-curve distribution from one baseline rating per
+// participant. Counting reviewer rows directly lets employees with more peer
+// reviewers distort the organization-level curve.
 async function computeRatingDistribution(
   orgId: number,
   cycleId: string,
 ): Promise<RatingDistribution[]> {
   const db = getDB();
-  const reviews = await db.findMany<Review>("reviews", {
-    filters: { cycle_id: cycleId, organization_id: orgId, status: "submitted" },
-    limit: 10000,
-  });
+  const [participants, reviews] = await Promise.all([
+    db.findMany<ReviewCycleParticipant>("review_cycle_participants", {
+      filters: { cycle_id: cycleId },
+      limit: 100000,
+    }),
+    db.findMany<Review>("reviews", {
+      filters: { cycle_id: cycleId, organization_id: orgId, status: "submitted" },
+      limit: 100000,
+    }),
+  ]);
 
-  const buckets: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-  let total = 0;
-
-  for (const review of reviews.data) {
-    if (review.overall_rating !== null) {
-      const rounded = Math.round(review.overall_rating);
-      const clamped = Math.max(1, Math.min(5, rounded));
-      buckets[clamped]++;
-      total++;
+  const participantRatings: number[] = [];
+  for (const participant of participants.data) {
+    const ratings = reviews.data
+      .filter((review) => review.employee_id === participant.employee_id)
+      .map((review) => Number(review.overall_rating))
+      .filter((rating) => Number.isFinite(rating) && rating >= 1 && rating <= 5);
+    if (ratings.length > 0) {
+      participantRatings.push(
+        ratings.reduce((sum, rating) => sum + rating, 0) / ratings.length,
+      );
     }
   }
+
+  return buildRatingDistribution(participantRatings);
+}
+
+export function buildRatingDistribution(ratings: number[]): RatingDistribution[] {
+  const buckets: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  for (const value of ratings) {
+    if (Number.isFinite(value)) {
+      const rounded = Math.round(value);
+      const clamped = Math.max(1, Math.min(5, rounded));
+      buckets[clamped]++;
+    }
+  }
+  const total = Object.values(buckets).reduce((sum, count) => sum + count, 0);
 
   return [1, 2, 3, 4, 5].map((rating) => ({
     rating,
@@ -873,28 +977,27 @@ async function computeRatingDistribution(
   }));
 }
 
-// Recompute and persist the distribution snapshot for a cycle (one row per
-// rating bucket). Replaces any previous snapshot for the cycle (#R11).
-async function persistRatingDistribution(orgId: number, cycleId: string): Promise<void> {
-  const db = getDB();
-  const distribution = await computeRatingDistribution(orgId, cycleId);
-
-  const existing = await db.findMany<{ id: string }>("rating_distributions", {
-    filters: { organization_id: orgId, cycle_id: cycleId },
-    limit: 100,
+// Persist the release snapshot inside the same transaction as participant and
+// cycle updates. The unique constraint guarantees one row per rating bucket.
+async function persistRatingDistribution(
+  db: IDataContext,
+  orgId: number,
+  cycleId: string,
+  distribution: RatingDistribution[],
+): Promise<void> {
+  await db.deleteMany("rating_distributions", {
+    organization_id: orgId,
+    cycle_id: cycleId,
   });
-  for (const row of existing.data) {
-    await db.delete("rating_distributions", row.id);
-  }
-
-  for (const bucket of distribution) {
-    await db.create("rating_distributions", {
+  await db.createMany(
+    "rating_distributions",
+    distribution.map((bucket) => ({
       id: uuidv4(),
       organization_id: orgId,
       cycle_id: cycleId,
       rating: bucket.rating,
       count: bucket.count,
       percentage: bucket.percentage,
-    } as any);
-  }
+    })),
+  );
 }
