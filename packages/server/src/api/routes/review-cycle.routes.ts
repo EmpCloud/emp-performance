@@ -163,8 +163,8 @@ router.post(
       const { id } = idParamSchema.parse(req.params);
       const orgId = req.user!.empcloudOrgId;
       const target = req.body?.status;
-      if (target !== "in_review" && target !== "calibration" && target !== "active") {
-        throw new ValidationError("status must be one of: in_review, calibration, active");
+      if (target !== "in_review" && target !== "calibration") {
+        throw new ValidationError("status must be one of: in_review, calibration");
       }
       const cycle = await cycleService.transitionCycle(orgId, id, target);
       return sendSuccess(res, cycle);

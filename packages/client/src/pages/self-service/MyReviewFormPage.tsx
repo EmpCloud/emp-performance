@@ -4,14 +4,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Star, Send, Save } from "lucide-react";
 import { apiGet, apiPost, apiPut } from "@/api/client";
 import type {
-  Review,
+  ReviewView,
   ReviewCompetencyRating,
   CompetencyFramework,
   Competency,
   ReviewCycle,
 } from "@emp-performance/shared";
 
-type ReviewWithRatings = Review & { competency_ratings: ReviewCompetencyRating[] };
+type ReviewWithRatings = ReviewView & { competency_ratings: ReviewCompetencyRating[] };
 type FrameworkWithCompetencies = CompetencyFramework & { competencies: Competency[] };
 
 function StarInput({
