@@ -20,6 +20,7 @@ import { competencyRoutes } from "./api/routes/competency.routes";
 import { reviewCycleRoutes } from "./api/routes/review-cycle.routes";
 import { reviewRoutes } from "./api/routes/review.routes";
 import { reviewOutcomeRoutes } from "./api/routes/review-outcome.routes";
+import { integrationOutboxRoutes } from "./api/routes/integration-outbox.routes";
 import { authRoutes } from "./api/routes/auth.routes";
 import { careerPathRoutes } from "./api/routes/career-path.routes";
 import { oneOnOneRoutes } from "./api/routes/one-on-one.routes";
@@ -116,6 +117,7 @@ v1.use("/pips", pipRoutes);
 v1.use("/review-cycles", reviewCycleRoutes);
 v1.use("/reviews", reviewRoutes);
 v1.use("/review-outcomes", reviewOutcomeRoutes);
+v1.use("/integrations/outbox", integrationOutboxRoutes);
 v1.use("/competencies", competencyRoutes);
 v1.use("/competency-frameworks", competencyRoutes); // alias
 v1.use("/career-paths", careerPathRoutes);

@@ -14,6 +14,7 @@ import { Pagination } from "@/components/Pagination";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { formatDate } from "@/lib/utils";
+import { OutcomeCorrectionPanel } from "./OutcomeCorrectionPanel";
 import type {
   PaginatedResponse,
   ReviewOutcomeAppealStatus,
@@ -61,6 +62,7 @@ export function ReviewOutcomeAppealsPanel({ cycleId }: { cycleId: string }) {
   const [filter, setFilter] = useState<AppealFilter>("all");
   const [page, setPage] = useState(1);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [expandedCorrectionId, setExpandedCorrectionId] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
 
   const appealsQuery = useQuery({
@@ -347,8 +349,42 @@ export function ReviewOutcomeAppealsPanel({ cycleId }: { cycleId: string }) {
                 )}
 
                 {appealStatus === "upheld" && (
-                  <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                    {t("reviewCycleDetail.appeals.correctionPending")}
+                  <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="font-semibold text-gray-950">
+                          {t("outcomeCorrection.manageHeading")}
+                        </p>
+                        <p className="mt-1 text-sm leading-6 text-gray-600">
+                          {t("outcomeCorrection.manageDescription")}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        aria-expanded={expandedCorrectionId === outcome.id}
+                        aria-controls={`outcome-correction-${outcome.id}`}
+                        onClick={() =>
+                          setExpandedCorrectionId((current) =>
+                            current === outcome.id ? null : outcome.id,
+                          )
+                        }
+                        className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border border-brand-300 bg-white px-4 text-sm font-semibold text-brand-700 hover:bg-brand-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+                      >
+                        <Scale className="h-4 w-4" aria-hidden="true" />
+                        {expandedCorrectionId === outcome.id
+                          ? t("outcomeCorrection.hideAction")
+                          : t("outcomeCorrection.manageAction")}
+                      </button>
+                    </div>
+                    {expandedCorrectionId === outcome.id && (
+                      <div id={`outcome-correction-${outcome.id}`}>
+                        <OutcomeCorrectionPanel
+                          outcome={outcome}
+                          enabled
+                          onChanged={invalidateAppeals}
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
 

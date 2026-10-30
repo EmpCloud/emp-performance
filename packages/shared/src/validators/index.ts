@@ -127,6 +127,30 @@ export const reviewOutcomeAppealListQuerySchema = z.object({
     .optional(),
 });
 
+export const reviewOutcomeRevisionParamSchema = z.object({
+  id: z.string().uuid(),
+  revisionId: z.string().uuid(),
+});
+
+export const proposeReviewOutcomeCorrectionSchema = z
+  .object({
+    rating: z.number().min(1).max(5),
+    reason: z.string().trim().min(20).max(4000),
+  })
+  .strict();
+
+export const approveReviewOutcomeCorrectionSchema = z
+  .object({
+    review_note: z.string().trim().max(4000).optional(),
+  })
+  .strict();
+
+export const rejectReviewOutcomeCorrectionSchema = z
+  .object({
+    review_note: z.string().trim().min(20).max(4000),
+  })
+  .strict();
+
 // ---------------------------------------------------------------------------
 // Reviews
 // ---------------------------------------------------------------------------

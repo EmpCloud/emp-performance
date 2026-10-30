@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   Clock3,
   FileText,
+  History,
   Loader2,
   MessageSquareWarning,
   ShieldCheck,
@@ -22,6 +23,7 @@ import { formatDate } from "@/lib/utils";
 import type {
   ReviewOutcomeAppealStatus,
   ReviewOutcomeDetail,
+  ReviewOutcomeRevision,
   ReviewOutcomeView,
 } from "@emp-performance/shared";
 
@@ -90,9 +92,20 @@ export function MyReviewOutcomePage() {
     retry: 1,
   });
 
+  const revisionsQuery = useQuery({
+    queryKey: ["review-outcome-revisions", userId, outcomeId],
+    queryFn: () =>
+      apiGet<ReviewOutcomeRevision[]>(`/review-outcomes/${outcomeId}/revisions`),
+    enabled: Boolean(userId && outcomeId),
+    retry: 1,
+  });
+
   const refreshOutcome = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["review-outcome", userId, outcomeId] }),
+      queryClient.invalidateQueries({
+        queryKey: ["review-outcome-revisions", userId, outcomeId],
+      }),
       queryClient.invalidateQueries({ queryKey: ["review-outcomes", "mine"] }),
     ]);
   };
@@ -192,6 +205,16 @@ export function MyReviewOutcomePage() {
   const acknowledgeMutationError = acknowledgeMutation.error
     ? apiErrorMessage(acknowledgeMutation.error, t("reviewOutcome.acknowledgeFailed"))
     : null;
+  const originalRating = Number(outcome.released_rating);
+  const effectiveRating = Number(outcome.effective_rating ?? outcome.released_rating);
+  const ratingWasCorrected =
+    Number.isFinite(originalRating) &&
+    Number.isFinite(effectiveRating) &&
+    originalRating !== effectiveRating;
+  const appliedCorrections = (revisionsQuery.data?.data ?? []).filter(
+    (revision) =>
+      revision.source === "appeal_correction" && revision.status === "applied",
+  );
 
   return (
     <main className="mx-auto max-w-6xl space-y-6" aria-labelledby="review-outcome-title">
@@ -229,11 +252,20 @@ export function MyReviewOutcomePage() {
               <Award className="h-6 w-6" aria-hidden="true" />
             </span>
             <div>
-              <p className="text-sm font-medium text-gray-600">{t("reviewOutcome.finalRating")}</p>
+              <p className="text-sm font-medium text-gray-600">
+                {t("reviewOutcome.currentEffectiveRating")}
+              </p>
               <p className="text-3xl font-bold text-gray-950">
-                {Number(outcome.released_rating).toFixed(2).replace(/\.00$/, "")}
+                {effectiveRating.toFixed(2).replace(/\.00$/, "")}
                 <span className="ml-1 text-base font-medium text-gray-500">/ 5</span>
               </p>
+              {ratingWasCorrected && (
+                <p className="mt-1 text-xs font-medium text-gray-600">
+                  {t("reviewOutcome.originalReleaseRating", {
+                    rating: originalRating.toFixed(2).replace(/\.00$/, ""),
+                  })}
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -264,6 +296,116 @@ export function MyReviewOutcomePage() {
             </div>
           </div>
         </div>
+      </section>
+
+      <section
+        className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"
+        aria-labelledby="rating-history-heading"
+      >
+        <div className="flex items-start gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
+            <History className="h-5 w-5" aria-hidden="true" />
+          </span>
+          <div>
+            <h2 id="rating-history-heading" className="text-lg font-semibold text-gray-900">
+              {t("reviewOutcome.ratingHistoryTitle")}
+            </h2>
+            <p className="mt-0.5 text-sm text-gray-600">
+              {t("reviewOutcome.ratingHistoryDescription")}
+            </p>
+          </div>
+        </div>
+
+        {revisionsQuery.isLoading ? (
+          <div className="mt-4 flex min-h-20 items-center justify-center gap-2 text-sm text-gray-600" role="status">
+            <Loader2 className="h-5 w-5 animate-spin text-brand-600 motion-reduce:animate-none" aria-hidden="true" />
+            {t("reviewOutcome.ratingHistoryLoading")}
+          </div>
+        ) : revisionsQuery.isError ? (
+          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4" role="alert">
+            <p className="text-sm text-red-700">
+              {apiErrorMessage(
+                revisionsQuery.error,
+                t("reviewOutcome.ratingHistoryLoadFailed"),
+              )}
+            </p>
+            <button
+              type="button"
+              onClick={() => void revisionsQuery.refetch()}
+              className="mt-3 inline-flex min-h-11 items-center rounded-lg px-3 text-sm font-semibold text-red-700 hover:bg-red-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600"
+            >
+              {t("reviewOutcome.ratingHistoryRetry")}
+            </button>
+          </div>
+        ) : (
+          <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                {t("reviewOutcome.originalRelease")}
+              </p>
+              <p className="mt-1 text-2xl font-bold text-gray-950">
+                {originalRating.toFixed(2).replace(/\.00$/, "")}
+                <span className="text-sm font-medium text-gray-500">/5</span>
+              </p>
+              <p className="mt-1 text-xs text-gray-500">
+                {t("reviewOutcome.releasedDate", {
+                  date: formatDate(outcome.released_at),
+                })}
+              </p>
+            </div>
+            <div className="rounded-lg border border-green-200 bg-green-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-green-800">
+                {t("reviewOutcome.currentEffectiveRating")}
+              </p>
+              <p className="mt-1 text-2xl font-bold text-green-950">
+                {effectiveRating.toFixed(2).replace(/\.00$/, "")}
+                <span className="text-sm font-medium text-green-700">/5</span>
+              </p>
+              <p className="mt-1 text-xs text-green-800">
+                {ratingWasCorrected
+                  ? t("reviewOutcome.latestApprovedCorrection")
+                  : t("reviewOutcome.noApprovedRatingChange")}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {!revisionsQuery.isLoading && !revisionsQuery.isError && (
+          appliedCorrections.length === 0 ? (
+            <p className="mt-4 rounded-lg border border-dashed border-gray-300 bg-gray-50 p-4 text-sm text-gray-600">
+              {t("reviewOutcome.noApprovedCorrections")}
+            </p>
+          ) : (
+            <ol
+              className="mt-4 space-y-3"
+              aria-label={t("reviewOutcome.approvedCorrectionsLabel")}
+            >
+              {appliedCorrections.map((revision) => (
+                <li key={revision.id} className="flex flex-col gap-2 rounded-lg border border-gray-200 p-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="font-medium text-gray-900">
+                      {t("reviewOutcome.approvedCorrectionTo", {
+                        rating: Number(revision.rating)
+                          .toFixed(2)
+                          .replace(/\.00$/, ""),
+                      })}
+                    </p>
+                    <p className="mt-1 text-sm text-gray-600">
+                      {t("reviewOutcome.appliedDate", {
+                        date: formatDate(
+                          revision.reviewed_at ?? revision.updated_at,
+                        ),
+                      })}
+                    </p>
+                  </div>
+                  <span className="self-start rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800">
+                    {t("reviewOutcome.appliedStatus")}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )
+        )}
       </section>
 
       <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm" aria-labelledby="feedback-heading">
@@ -397,7 +539,10 @@ export function MyReviewOutcomePage() {
           </div>
 
           {outcome.appeal_status ? (
-            <AppealTimeline outcome={outcome} />
+            <AppealTimeline
+              outcome={outcome}
+              correctionApplied={appliedCorrections.length > 0}
+            />
           ) : appealIsOpen ? (
             <form className="mt-5 space-y-4" onSubmit={submitAppeal} noValidate>
               <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
@@ -487,7 +632,13 @@ export function MyReviewOutcomePage() {
   );
 }
 
-function AppealTimeline({ outcome }: { outcome: ReviewOutcomeView }) {
+function AppealTimeline({
+  outcome,
+  correctionApplied,
+}: {
+  outcome: ReviewOutcomeView;
+  correctionApplied: boolean;
+}) {
   const { t } = useTranslation();
   const status = outcome.appeal_status;
   if (!status) return null;
@@ -548,7 +699,11 @@ function AppealTimeline({ outcome }: { outcome: ReviewOutcomeView }) {
       </ol>
       {status === "upheld" && (
         <p className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-900">
-          {t("reviewOutcome.upheldCorrectionPending")}
+          {t(
+            correctionApplied
+              ? "reviewOutcome.upheldCorrectionApplied"
+              : "reviewOutcome.upheldCorrectionPending",
+          )}
         </p>
       )}
     </div>

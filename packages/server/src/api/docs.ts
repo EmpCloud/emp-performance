@@ -141,6 +141,7 @@ const spec = {
             "application/json": {
               schema: {
                 type: "object",
+                additionalProperties: false,
                 required: ["rating", "reason"],
                 properties: {
                   rating: { type: "number", minimum: 1, maximum: 5 },
@@ -273,6 +274,136 @@ const spec = {
         summary: "Resolve an appeal without mutating the released rating",
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
         responses: { "200": { description: "Appeal resolved" } },
+      },
+    },
+    "/api/v1/review-outcomes/{id}/revisions": {
+      get: {
+        tags: ["Review Outcomes"],
+        summary: "List the effective, append-only rating revision history",
+        description:
+          "Employees see applied revisions for their own outcome. Authorized administrators also see pending and rejected governance records.",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: { "200": { description: "Outcome revision history" } },
+      },
+    },
+    "/api/v1/review-outcomes/{id}/corrections": {
+      post: {
+        tags: ["Review Outcomes"],
+        summary: "Propose a versioned correction for an upheld appeal",
+        description:
+          "Creates a pending revision without changing the immutable released rating. A different authorized administrator must approve it.",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["rating", "reason"],
+                properties: {
+                  rating: { type: "number", minimum: 1, maximum: 5 },
+                  reason: { type: "string", minLength: 20, maxLength: 4000 },
+                },
+              },
+            },
+          },
+        },
+        responses: { "201": { description: "Correction proposed" } },
+      },
+    },
+    "/api/v1/review-outcomes/{id}/corrections/{revisionId}/approve": {
+      post: {
+        tags: ["Review Outcomes"],
+        summary: "Approve and atomically apply a proposed correction",
+        description:
+          "Enforces four-eyes approval, updates the effective rating and analytics materializations, and preserves the original released rating.",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "revisionId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+        ],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  review_note: { type: "string", maxLength: 4000 },
+                },
+              },
+            },
+          },
+        },
+        responses: { "200": { description: "Correction approved and applied" } },
+      },
+    },
+    "/api/v1/review-outcomes/{id}/corrections/{revisionId}/reject": {
+      post: {
+        tags: ["Review Outcomes"],
+        summary: "Reject a proposed correction",
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "revisionId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["review_note"],
+                properties: {
+                  review_note: { type: "string", minLength: 20, maxLength: 4000 },
+                },
+              },
+            },
+          },
+        },
+        responses: { "200": { description: "Correction rejected" } },
+      },
+    },
+
+    // =========================================================================
+    // INTEGRATION OUTBOX OPERATIONS
+    // =========================================================================
+    "/api/v1/integrations/outbox/summary": {
+      get: {
+        tags: ["Integration Operations"],
+        summary: "Get tenant-scoped integration delivery health",
+        responses: { "200": { description: "Outbox status counts and oldest pending event" } },
+      },
+    },
+    "/api/v1/integrations/outbox": {
+      get: {
+        tags: ["Integration Operations"],
+        summary: "List tenant-scoped integration events without payloads",
+        parameters: [
+          { name: "status", in: "query", schema: { type: "string", enum: ["pending", "processing", "retry", "delivered", "dead"] } },
+          { name: "eventType", in: "query", schema: { type: "string" } },
+          { name: "page", in: "query", schema: { type: "integer", minimum: 1 } },
+          { name: "perPage", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
+        ],
+        responses: { "200": { description: "Paginated outbox event list" } },
+      },
+    },
+    "/api/v1/integrations/outbox/{id}": {
+      get: {
+        tags: ["Integration Operations"],
+        summary: "Get a sanitized event and delivery-attempt timeline",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: { "200": { description: "Sanitized event details and attempt history" } },
+      },
+    },
+    "/api/v1/integrations/outbox/{id}/replay": {
+      post: {
+        tags: ["Integration Operations"],
+        summary: "Safely replay a dead integration event",
+        description:
+          "Preserves the event identity and idempotency key, resets its delivery lease, and starts a new replay generation.",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: { "202": { description: "Dead event queued for replay" } },
       },
     },
 

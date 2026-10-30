@@ -214,6 +214,11 @@ const SuccessionDetailPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import("@/pages/settings/SettingsPage").then((m) => ({ default: m.SettingsPage })),
 );
+const IntegrationOutboxPage = lazy(() =>
+  import("@/pages/settings/IntegrationOutboxPage").then((m) => ({
+    default: m.IntegrationOutboxPage,
+  })),
+);
 
 export function AppRoutes() {
   return (
@@ -313,6 +318,7 @@ export function AppRoutes() {
         {/* Settings */}
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/settings/notification-log" element={<NotificationLogPage />} />
+        <Route path="/settings/integration-operations" element={<IntegrationOutboxPage />} />
       </Route>
 
       {/* 404 */}

@@ -4,6 +4,7 @@ import { config } from "../../config";
 import { getDB } from "../../db/adapters";
 import type { IDataContext } from "../../db/adapters/interface";
 import { logger } from "../../utils/logger";
+import { sanitizeOperationalError } from "../../utils/sanitize-operational-error";
 import { logDelivery } from "../notification/notification.service";
 
 export type OutboxStatus =
@@ -30,6 +31,11 @@ export interface IntegrationOutboxEvent {
   lock_token: string | null;
   last_error: string | null;
   delivered_at: Date | null;
+  replay_count?: number;
+  last_replayed_at?: Date | null;
+  last_replayed_by?: number | null;
+  dead_at?: Date | null;
+  alerted_at?: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -60,7 +66,9 @@ export interface OutboxBatchResult {
 }
 
 const OUTBOX_TABLE = "integration_outbox";
+const ATTEMPT_TABLE = "integration_outbox_attempts";
 const ERROR_LIMIT = 2_000;
+const ATTEMPT_ERROR_LIMIT = 500;
 
 function positiveInteger(value: number, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
@@ -79,7 +87,19 @@ function parsePayload(payload: IntegrationOutboxEvent["payload"]): Record<string
 
 function serializeError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message.slice(0, ERROR_LIMIT);
+  return (
+    sanitizeOperationalError(message, ERROR_LIMIT) ??
+    "Webhook delivery failed"
+  );
+}
+
+function safeWebhookRecipient(value: string | undefined): string {
+  if (!value) return "configured webhook";
+  try {
+    return new URL(value).origin;
+  } catch {
+    return "configured webhook";
+  }
 }
 
 export function calculateRetryDelayMs(
@@ -160,6 +180,11 @@ export async function enqueueIntegrationEvent(
       lock_token: null,
       last_error: null,
       delivered_at: null,
+      replay_count: 0,
+      last_replayed_at: null,
+      last_replayed_by: null,
+      dead_at: null,
+      alerted_at: null,
     } as Partial<IntegrationOutboxEvent>);
   } catch (error) {
     // A competing transaction may have won the unique idempotency-key race.
@@ -242,18 +267,83 @@ async function logDeliveryBestEffort(
   }
 }
 
+interface PersistAttemptInput {
+  result: "delivered" | "retry" | "dead";
+  attempt: number;
+  startedAt: Date;
+  completedAt: Date;
+  httpStatus: number | null;
+  error: string | null;
+  state: Record<string, unknown>;
+  emitDeadAlert?: boolean;
+}
+
+async function persistAttemptOutcome(
+  event: IntegrationOutboxEvent,
+  input: PersistAttemptInput,
+): Promise<boolean> {
+  const db = getDB();
+  return db.transaction(async (trx) => {
+    const updated = await trx.updateMany(
+      OUTBOX_TABLE,
+      { id: event.id, status: "processing", lock_token: event.lock_token },
+      input.state,
+    );
+    if (updated !== 1) return false;
+
+    await trx.create(ATTEMPT_TABLE, {
+      id: uuidv4(),
+      outbox_event_id: event.id,
+      replay_generation: Number(event.replay_count ?? 0),
+      attempt_number: input.attempt,
+      result: input.result,
+      http_status: input.httpStatus,
+      error: sanitizeOperationalError(input.error, ATTEMPT_ERROR_LIMIT),
+      started_at: input.startedAt,
+      completed_at: input.completedAt,
+    } as any);
+    if (input.emitDeadAlert) {
+      // This audit row is the durable first-dead alert. `alerted_at` is written
+      // in the same transaction, while the structured logger below mirrors it
+      // to configured operational transports on a best-effort basis.
+      await trx.create("audit_logs", {
+        id: uuidv4(),
+        organization_id: event.organization_id,
+        user_id: 0,
+        action: "integration_outbox.dead_alerted",
+        entity_type: "integration_outbox",
+        entity_id: event.id,
+        old_values: JSON.stringify({ status: "processing" }),
+        new_values: JSON.stringify({
+          status: "dead",
+          event_type: event.event_type,
+          aggregate_type: event.aggregate_type,
+          aggregate_id: event.aggregate_id,
+          replay_generation: Number(event.replay_count ?? 0),
+          attempt_number: input.attempt,
+          error_present: input.error !== null,
+        }),
+        ip_address: null,
+        user_agent: null,
+      } as any);
+    }
+    return true;
+  });
+}
+
 async function deliverEvent(
   event: IntegrationOutboxEvent,
   fetchImpl: typeof fetch,
   now: () => Date,
   random: () => number,
 ): Promise<"delivered" | "retry" | "dead" | "lease_lost"> {
-  const db = getDB();
   const webhook = config.empcloudWebhook;
   const attempt = event.attempts + 1;
+  const startedAt = now();
+  let httpStatus: number | null = null;
   try {
     const body = JSON.stringify(parsePayload(event.payload));
-    const timestamp = now().toISOString();
+    const timestamp = startedAt.toISOString();
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       "X-Event-Id": event.id,
@@ -277,30 +367,36 @@ async function deliverEvent(
         positiveInteger(webhook.timeoutMs, 10_000),
       ),
     });
+    httpStatus = response.status;
     if (!response.ok) {
       throw new Error(`EMP Cloud webhook returned HTTP ${response.status}`);
     }
 
     const deliveredAt = now();
-    const updated = await db.updateMany(
-      OUTBOX_TABLE,
-      { id: event.id, status: "processing", lock_token: event.lock_token },
-      {
+    const persisted = await persistAttemptOutcome(event, {
+      result: "delivered",
+      attempt,
+      startedAt,
+      completedAt: deliveredAt,
+      httpStatus,
+      error: null,
+      state: {
         status: "delivered",
         attempts: attempt,
         delivered_at: deliveredAt,
         last_error: null,
+        dead_at: null,
         lock_token: null,
         locked_at: null,
         locked_until: null,
       },
-    );
-    if (updated !== 1) return "lease_lost";
+    });
+    if (!persisted) return "lease_lost";
     await logDeliveryBestEffort({
       organizationId: event.organization_id,
       channel: "webhook",
       category: event.event_type,
-      recipient: webhook.url,
+      recipient: safeWebhookRecipient(webhook.url),
       subject: event.aggregate_id,
       status: "sent",
     });
@@ -312,25 +408,45 @@ async function deliverEvent(
       failedAt.getTime() + calculateRetryDelayMs(attempt, random),
     );
     const message = serializeError(error);
-    const updated = await db.updateMany(
-      OUTBOX_TABLE,
-      { id: event.id, status: "processing", lock_token: event.lock_token },
-      {
+    const shouldAlert = terminal && !event.alerted_at;
+    const persisted = await persistAttemptOutcome(event, {
+      result: terminal ? "dead" : "retry",
+      attempt,
+      startedAt,
+      completedAt: failedAt,
+      httpStatus,
+      error: message,
+      emitDeadAlert: shouldAlert,
+      state: {
         status: terminal ? "dead" : "retry",
         attempts: attempt,
         next_attempt_at: nextAttempt,
         last_error: message,
+        dead_at: terminal ? failedAt : null,
+        alerted_at: shouldAlert ? failedAt : event.alerted_at ?? null,
         lock_token: null,
         locked_at: null,
         locked_until: null,
       },
-    );
-    if (updated !== 1) return "lease_lost";
+    });
+    if (!persisted) return "lease_lost";
+    if (shouldAlert) {
+      logger.error("Integration outbox event moved to dead state", {
+        eventId: event.id,
+        organizationId: event.organization_id,
+        eventType: event.event_type,
+        aggregateType: event.aggregate_type,
+        aggregateId: event.aggregate_id,
+        replayGeneration: Number(event.replay_count ?? 0),
+        attempt,
+        error: sanitizeOperationalError(message, ATTEMPT_ERROR_LIMIT),
+      });
+    }
     await logDeliveryBestEffort({
       organizationId: event.organization_id,
       channel: "webhook",
       category: event.event_type,
-      recipient: webhook.url,
+      recipient: safeWebhookRecipient(webhook.url),
       subject: event.aggregate_id,
       status: "failed",
       error: message,
