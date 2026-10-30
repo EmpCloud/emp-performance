@@ -15,6 +15,9 @@ export interface ReviewPolicyResource {
   organizationId: number;
   employeeId: number;
   reviewerId: number;
+  type?: "self" | "manager" | "peer" | string;
+  reviewStatus?: "pending" | "draft" | "submitted" | string;
+  cycleStatus?: "draft" | "active" | "in_review" | "calibration" | "completed" | "cancelled" | string;
 }
 
 const REVIEW_CREATOR_ROLES: readonly CanonicalRole[] = [
@@ -38,10 +41,17 @@ const reviewPolicy = definePolicy<ReviewAction, ReviewPolicyResource>(({ actor, 
 
   switch (action) {
     case "read":
+      if (isAdministrativeRole(actor.role) || actor.userId === resource.reviewerId) {
+        return true;
+      }
+
+      // Review subjects do not see manager or peer drafts. Feedback is
+      // released only after both submission and cycle completion. Self reviews
+      // are already covered by the assigned-reviewer branch above.
       return (
-        isAdministrativeRole(actor.role) ||
-        actor.userId === resource.reviewerId ||
-        actor.userId === resource.employeeId
+        actor.userId === resource.employeeId &&
+        resource.reviewStatus === "submitted" &&
+        resource.cycleStatus === "completed"
       );
     case "save_draft":
     case "submit":

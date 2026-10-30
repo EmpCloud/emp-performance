@@ -16,8 +16,10 @@ const mockDB = {
   findById: vi.fn().mockResolvedValue(null),
   findMany: vi.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 20, totalPages: 0 }),
   create: vi.fn().mockImplementation((_t: string, d: any) => Promise.resolve({ id: "mock-id", ...d })),
+  createMany: vi.fn().mockResolvedValue([]),
   update: vi.fn().mockImplementation((_t: string, id: string, d: any) => Promise.resolve({ id, ...d })),
   delete: vi.fn().mockResolvedValue(undefined),
+  deleteMany: vi.fn().mockResolvedValue(0),
   count: vi.fn().mockResolvedValue(0),
   raw: vi.fn().mockResolvedValue([[]]),
 };
@@ -278,30 +280,30 @@ describe("Peer Review Service", () => {
       if (c === 1) return { id: "c1", status: "active" }; // cycle
       return null; // no existing nomination
     });
-    const r = await svc.nominate(ORG, "c1", 522, 200, 100);
+    const r = await svc.nominate(ORG, "c1", 522, 200, REVIEW_ADMIN_ACTOR);
     expect(r).toHaveProperty("id");
   });
   it("listNominations returns data", async () => {
-    mockDB.findOne.mockResolvedValue({ id: "c1" });
-    const r = await svc.listNominations(ORG, "c1");
+    mockDB.findOne.mockResolvedValue({ id: "c1", status: "active" });
+    const r = await svc.listNominations(ORG, "c1", REVIEW_ADMIN_ACTOR);
     expect(r).toBeDefined();
   });
   it("approveNomination throws for missing", async () => {
-    await expect(svc.approveNomination(ORG, "n1")).rejects.toThrow();
+    await expect(svc.approveNomination(ORG, "n1", REVIEW_ADMIN_ACTOR)).rejects.toThrow();
   });
   it("approveNomination succeeds", async () => {
     mockDB.findById.mockResolvedValue({ id: "n1", status: "pending", cycle_id: "c1" });
-    mockDB.findOne.mockResolvedValue({ id: "c1", organization_id: ORG });
-    const r = await svc.approveNomination(ORG, "n1", 100);
+    mockDB.findOne.mockResolvedValue({ id: "c1", organization_id: ORG, status: "active" });
+    const r = await svc.approveNomination(ORG, "n1", REVIEW_ADMIN_ACTOR);
     expect(r).toHaveProperty("id");
   });
   it("declineNomination throws for missing", async () => {
-    await expect(svc.declineNomination(ORG, "n1")).rejects.toThrow();
+    await expect(svc.declineNomination(ORG, "n1", REVIEW_ADMIN_ACTOR)).rejects.toThrow();
   });
   it("declineNomination succeeds", async () => {
     mockDB.findById.mockResolvedValue({ id: "n1", status: "pending", cycle_id: "c1" });
-    mockDB.findOne.mockResolvedValue({ id: "c1", organization_id: ORG });
-    const r = await svc.declineNomination(ORG, "n1", 100);
+    mockDB.findOne.mockResolvedValue({ id: "c1", organization_id: ORG, status: "active" });
+    const r = await svc.declineNomination(ORG, "n1", REVIEW_ADMIN_ACTOR);
     expect(r).toHaveProperty("id");
   });
 });
@@ -312,9 +314,10 @@ describe("Review Service", () => {
   beforeAll(async () => { svc = await import("../../services/review/review.service"); });
 
   it("createReview creates", async () => {
-    // 1st findOne resolves the cycle; 2nd is the duplicate guard (none exists).
+    // Cycle, participant relationship, then duplicate guard.
     mockDB.findOne
-      .mockResolvedValueOnce({ id: "c1", status: "active" })
+      .mockResolvedValueOnce({ id: "c1", organization_id: ORG, status: "active" })
+      .mockResolvedValueOnce({ id: "p1", cycle_id: "c1", employee_id: 522, manager_id: 100 })
       .mockResolvedValueOnce(null);
     const r = await svc.createReview(ORG, {
       cycle_id: "c1", employee_id: 522, reviewer_id: 100, type: "manager" as any,
@@ -322,16 +325,21 @@ describe("Review Service", () => {
     expect(r).toHaveProperty("id");
   });
   it("getReview throws for missing", async () => {
-    await expect(svc.getReview(ORG, "r1")).rejects.toThrow();
+    await expect(svc.getReview(ORG, "r1", REVIEW_ADMIN_ACTOR)).rejects.toThrow();
   });
   it("getReview succeeds", async () => {
-    mockDB.findOne.mockResolvedValue({ id: "r1" });
+    mockDB.findOne
+      .mockResolvedValueOnce({
+        id: "r1", organization_id: ORG, cycle_id: "c1", employee_id: 522,
+        reviewer_id: 100, type: "manager", status: "submitted",
+      })
+      .mockResolvedValueOnce({ id: "c1", organization_id: ORG, status: "completed", framework_id: null });
     mockDB.findMany.mockResolvedValue({ data: [], total: 0, page: 1, limit: 100, totalPages: 0 });
-    const r = await svc.getReview(ORG, "r1");
+    const r = await svc.getReview(ORG, "r1", REVIEW_ADMIN_ACTOR);
     expect(r).toHaveProperty("id");
   });
   it("listReviews returns data", async () => {
-    const r = await svc.listReviews(ORG, {});
+    const r = await svc.listReviews(ORG, {}, REVIEW_ADMIN_ACTOR);
     expect(r).toBeDefined();
   });
   it("saveDraft throws for missing review", async () => {
@@ -342,7 +350,7 @@ describe("Review Service", () => {
   });
   it("getReviewsForParticipant returns data", async () => {
     mockDB.raw.mockResolvedValue([[]]);
-    const r = await svc.getReviewsForParticipant(ORG, "c1", 522);
+    const r = await svc.getReviewsForParticipant(ORG, "c1", 522, REVIEW_ADMIN_ACTOR);
     expect(r).toBeDefined();
   });
 });
@@ -385,7 +393,12 @@ describe("Review Cycle Service", () => {
   });
   it("launchCycle succeeds", async () => {
     mockDB.findOne.mockResolvedValue({ id: "c1", status: "draft" });
-    mockDB.count.mockResolvedValue(3); // needs participants
+    mockDB.findMany
+      .mockResolvedValueOnce({
+        data: [{ id: "p1", cycle_id: "c1", employee_id: 522, manager_id: null }],
+        total: 1, page: 1, limit: 100000, totalPages: 1,
+      })
+      .mockResolvedValueOnce({ data: [], total: 0, page: 1, limit: 100000, totalPages: 0 });
     const r = await svc.launchCycle(ORG, "c1");
     expect(r).toHaveProperty("id");
   });
