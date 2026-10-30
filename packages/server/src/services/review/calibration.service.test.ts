@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { mockFindUserById } = vi.hoisted(() => ({
@@ -8,6 +9,7 @@ const mockDB = {
   findOne: vi.fn(),
   findMany: vi.fn(),
   create: vi.fn(),
+  createMany: vi.fn(),
   update: vi.fn(),
   raw: vi.fn(),
   transaction: vi.fn(),
@@ -89,6 +91,37 @@ function page<T>(data: T[]) {
   };
 }
 
+function snapshotHash(
+  rows: Array<{
+    participant_id: string;
+    employee_id: number;
+    baseline_rating: number;
+    effective_rating: number;
+    decision_id: string | null;
+    decision_version: number | null;
+  }>,
+) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify(
+        rows
+          .map((row) => ({
+            participant_id: row.participant_id,
+            employee_id: Number(row.employee_id),
+            baseline_rating: Number(row.baseline_rating),
+            effective_rating: Number(row.effective_rating),
+            decision_id: row.decision_id ?? null,
+            decision_version:
+              row.decision_version === null ? null : Number(row.decision_version),
+          }))
+          .sort((left, right) =>
+            left.participant_id.localeCompare(right.participant_id),
+          ),
+      ),
+    )
+    .digest("hex");
+}
+
 function arrangeCycleAndParticipant(currentCycle = cycle()) {
   mockDB.findOne.mockImplementation(async (table: string) => {
     if (table === "review_cycles") return currentCycle;
@@ -162,6 +195,15 @@ describe("calibration.service", () => {
         },
       ],
     });
+  });
+
+  it("does not expose calibration data before the calibration phase", async () => {
+    arrangeCycleAndParticipant(cycle({ status: "in_review" }));
+
+    await expect(getCalibrationRoster(ORG_ID, CYCLE_ID)).rejects.toThrow(
+      "only after the cycle enters calibration",
+    );
+    expect(mockDB.findMany).not.toHaveBeenCalled();
   });
 
   it("uses the newest immutable decision as the effective rating", async () => {
@@ -274,6 +316,7 @@ describe("calibration.service", () => {
   it("finalizes a complete roster without requiring adjustment decisions", async () => {
     arrangeCycleAndParticipant();
     arrangeRosterData({ decisions: [] });
+    mockDB.createMany.mockImplementation(async (_table: string, data: any[]) => data);
     mockDB.update.mockImplementation(async (_table: string, _id: string, data: any) => ({
       ...cycle(),
       ...data,
@@ -287,7 +330,21 @@ describe("calibration.service", () => {
       expect.objectContaining({
         calibration_finalized_at: expect.any(String),
         calibration_finalized_by: 99,
+        calibration_snapshot_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
       }),
+    );
+    expect(mockDB.createMany).toHaveBeenCalledWith(
+      "review_calibration_snapshots",
+      [
+        expect.objectContaining({
+          participant_id: PARTICIPANT_ID,
+          employee_id: 101,
+          baseline_rating: 4,
+          effective_rating: 4,
+          decision_id: null,
+          decision_version: null,
+        }),
+      ],
     );
     expect(mockDB.raw).toHaveBeenCalledWith(
       expect.stringContaining("FOR UPDATE"),
@@ -306,13 +363,46 @@ describe("calibration.service", () => {
     expect(mockDB.update).not.toHaveBeenCalled();
   });
 
-  it("returns baseline and overridden ratings only after finalization", async () => {
+  it("refuses to finalize while an assigned peer review is incomplete", async () => {
+    arrangeCycleAndParticipant();
+    arrangeRosterData({
+      reviews: [
+        review(),
+        review({ reviewer_id: 202, type: "manager", overall_rating: 5 }),
+        review({ id: "peer-1", reviewer_id: 303, type: "peer", status: "draft", overall_rating: 4 }),
+      ],
+    });
+
+    await expect(finalizeCalibration(ORG_ID, CYCLE_ID, 99)).rejects.toThrow(
+      "1 participant(s) have incomplete or invalid required reviews",
+    );
+    expect(mockDB.createMany).not.toHaveBeenCalled();
+  });
+
+  it("returns the immutable rating snapshot only after finalization", async () => {
+    const snapshots = [
+      {
+        id: "snapshot-1",
+        organization_id: ORG_ID,
+        cycle_id: CYCLE_ID,
+        participant_id: PARTICIPANT_ID,
+        employee_id: 101,
+        baseline_rating: 4,
+        effective_rating: 4.5,
+        decision_id: "decision-1",
+        decision_version: 1,
+        finalized_at: new Date("2026-10-29T10:00:00Z"),
+      },
+    ];
     const finalizedCycle = cycle({
       calibration_finalized_at: new Date("2026-10-29T10:00:00Z"),
       calibration_finalized_by: 99,
+      calibration_snapshot_hash: snapshotHash(snapshots),
     });
     arrangeCycleAndParticipant(finalizedCycle);
-    arrangeRosterData({ decisions: [decision({ calibrated_rating: 4.5 })] });
+    mockDB.findMany.mockImplementation(async (table: string) =>
+      table === "review_calibration_snapshots" ? page(snapshots) : page([]),
+    );
 
     await expect(getFinalizedCalibrationRatings(ORG_ID, CYCLE_ID)).resolves.toEqual([
       {
@@ -324,5 +414,34 @@ describe("calibration.service", () => {
         decision_version: 1,
       },
     ]);
+  });
+
+  it("refuses release when the finalized snapshot digest does not match", async () => {
+    arrangeCycleAndParticipant(
+      cycle({
+        calibration_finalized_at: new Date("2026-10-29T10:00:00Z"),
+        calibration_snapshot_hash: "0".repeat(64),
+      }),
+    );
+    mockDB.findMany.mockResolvedValue(
+      page([
+        {
+          id: "snapshot-1",
+          organization_id: ORG_ID,
+          cycle_id: CYCLE_ID,
+          participant_id: PARTICIPANT_ID,
+          employee_id: 101,
+          baseline_rating: 4,
+          effective_rating: 4.5,
+          decision_id: null,
+          decision_version: null,
+          finalized_at: new Date(),
+        },
+      ]),
+    );
+
+    await expect(getFinalizedCalibrationRatings(ORG_ID, CYCLE_ID)).rejects.toThrow(
+      "integrity check",
+    );
   });
 });

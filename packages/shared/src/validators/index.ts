@@ -84,7 +84,7 @@ export const addParticipantsSchema = z.object({
 });
 
 export const calibrationDecisionSchema = z.object({
-  rating: z.coerce.number().min(1).max(5),
+  rating: z.number().min(1).max(5),
   reason: z.string().trim().min(10).max(2000),
 });
 
@@ -95,6 +95,36 @@ export const calibrationParticipantParamSchema = z.object({
 
 export const transitionReviewCycleSchema = z.object({
   status: z.enum([ReviewCycleStatus.IN_REVIEW, ReviewCycleStatus.CALIBRATION]),
+});
+
+// ---------------------------------------------------------------------------
+// Released review outcomes / employee response governance
+// ---------------------------------------------------------------------------
+
+export const acknowledgeReviewOutcomeSchema = z
+  .object({
+    note: z.string().trim().max(2000).optional(),
+  })
+  .strict();
+
+export const submitReviewOutcomeAppealSchema = z
+  .object({
+    reason: z.string().trim().min(20).max(4000),
+  })
+  .strict();
+
+export const resolveReviewOutcomeAppealSchema = z
+  .object({
+    outcome: z.enum(["upheld", "not_upheld"]),
+    resolution_note: z.string().trim().min(20).max(4000),
+  })
+  .strict();
+
+export const reviewOutcomeAppealListQuerySchema = z.object({
+  cycleId: z.string().uuid().optional(),
+  status: z
+    .enum(["submitted", "under_review", "upheld", "not_upheld", "withdrawn"])
+    .optional(),
 });
 
 // ---------------------------------------------------------------------------

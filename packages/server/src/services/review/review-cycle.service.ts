@@ -3,7 +3,9 @@ import { getDB } from "../../db/adapters";
 import type { IDataContext } from "../../db/adapters/interface";
 import { NotFoundError, ValidationError } from "../../utils/errors";
 import { findUserById } from "../../db/empcloud";
+import { enqueueIntegrationEvent } from "../integration/outbox.service";
 import { getFinalizedCalibrationRatings } from "./calibration.service";
+import { createReviewOutcomesForRelease } from "./review-outcome.service";
 import type {
   CompetencyFramework,
   ReviewCycle,
@@ -18,8 +20,9 @@ type ParticipantInput = { employee_id: number; manager_id?: number };
 async function assertUsableFramework(
   orgId: number,
   frameworkId: string,
+  db: IDataContext = getDB(),
 ): Promise<CompetencyFramework> {
-  const framework = await getDB().findOne<CompetencyFramework>("competency_frameworks", {
+  const framework = await db.findOne<CompetencyFramework>("competency_frameworks", {
     id: frameworkId,
     organization_id: orgId,
     is_active: true,
@@ -261,14 +264,19 @@ export async function updateCycle(
   data: Record<string, any>,
 ): Promise<ReviewCycle> {
   const db = getDB();
-  const existing = await db.findOne<ReviewCycle>("review_cycles", {
-    id,
-    organization_id: orgId,
-  });
-  if (!existing) throw new NotFoundError("ReviewCycle", id);
-  if (existing.status === "completed" || existing.status === "cancelled") {
-    throw new ValidationError("Cannot update a completed or cancelled cycle");
-  }
+  return db.transaction(async (trx) => {
+    await trx.raw(
+      "SELECT id FROM review_cycles WHERE id = ? AND organization_id = ? FOR UPDATE",
+      [id, orgId],
+    );
+    const existing = await trx.findOne<ReviewCycle>("review_cycles", {
+      id,
+      organization_id: orgId,
+    });
+    if (!existing) throw new NotFoundError("ReviewCycle", id);
+    if (existing.status === "completed" || existing.status === "cancelled") {
+      throw new ValidationError("Cannot update a completed or cancelled cycle");
+    }
 
   if (
     Object.prototype.hasOwnProperty.call(data, "status") &&
@@ -294,7 +302,7 @@ export async function updateCycle(
     if (existing.status !== "draft") {
       throw new ValidationError("Framework can only be changed while the cycle is in draft");
     }
-    const reviewCount = await db.count("reviews", {
+    const reviewCount = await trx.count("reviews", {
       organization_id: orgId,
       cycle_id: id,
     });
@@ -307,10 +315,11 @@ export async function updateCycle(
     ? (data.framework_id as string | null | undefined)
     : existing.framework_id;
   if (effectiveFrameworkId) {
-    await assertUsableFramework(orgId, effectiveFrameworkId);
+    await assertUsableFramework(orgId, effectiveFrameworkId, trx);
   }
 
-  return db.update<ReviewCycle>("review_cycles", id, data as any);
+    return trx.update<ReviewCycle>("review_cycles", id, data as any);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -321,49 +330,61 @@ export async function updateCycle(
 // so we don't drop reviews mid-flight.
 export async function deleteCycle(orgId: number, id: string): Promise<void> {
   const db = getDB();
-  const cycle = await db.findOne<ReviewCycle>("review_cycles", {
-    id,
-    organization_id: orgId,
+  await db.transaction(async (trx) => {
+    await trx.raw(
+      "SELECT id FROM review_cycles WHERE id = ? AND organization_id = ? FOR UPDATE",
+      [id, orgId],
+    );
+    const cycle = await trx.findOne<ReviewCycle>("review_cycles", {
+      id,
+      organization_id: orgId,
+    });
+    if (!cycle) throw new NotFoundError("ReviewCycle", id);
+    if (cycle.status !== "draft") {
+      throw new ValidationError("Only draft cycles can be deleted");
+    }
+    await trx.delete("review_cycles", id);
   });
-  if (!cycle) throw new NotFoundError("ReviewCycle", id);
-  if (cycle.status !== "draft") {
-    throw new ValidationError("Only draft cycles can be deleted");
-  }
-  await db.delete("review_cycles", id);
 }
 
 export async function launchCycle(orgId: number, id: string): Promise<ReviewCycle> {
   const db = getDB();
-  const cycle = await db.findOne<ReviewCycle>("review_cycles", {
-    id,
-    organization_id: orgId,
-  });
-  if (!cycle) throw new NotFoundError("ReviewCycle", id);
-  if (cycle.status !== "draft") {
-    throw new ValidationError("Only draft cycles can be launched");
-  }
-  if (cycle.framework_id) {
-    await assertUsableFramework(orgId, cycle.framework_id);
-  }
+  return db.transaction(async (trx) => {
+    await trx.raw(
+      "SELECT id FROM review_cycles WHERE id = ? AND organization_id = ? FOR UPDATE",
+      [id, orgId],
+    );
+    const cycle = await trx.findOne<ReviewCycle>("review_cycles", {
+      id,
+      organization_id: orgId,
+    });
+    if (!cycle) throw new NotFoundError("ReviewCycle", id);
+    if (cycle.status !== "draft") {
+      throw new ValidationError("Only draft cycles can be launched");
+    }
+    if (cycle.framework_id) {
+      await assertUsableFramework(orgId, cycle.framework_id, trx);
+    }
 
-  const participants = await db.findMany<ReviewCycleParticipant>("review_cycle_participants", {
-    filters: { cycle_id: id },
-    limit: 100000,
-  });
-  if (participants.data.length === 0) {
-    throw new ValidationError("Cannot launch a cycle with no participants");
-  }
-  for (const participant of participants.data) {
-    await assertStoredParticipantRelationship(orgId, participant);
-  }
+    const participants = await trx.findMany<ReviewCycleParticipant>("review_cycle_participants", {
+      filters: { cycle_id: id },
+      limit: 100000,
+    });
+    if (participants.data.length === 0) {
+      throw new ValidationError("Cannot launch a cycle with no participants");
+    }
+    for (const participant of participants.data) {
+      await assertStoredParticipantRelationship(orgId, participant);
+    }
 
   // Generate the review rows for every participant so reviewers actually have
   // something to fill in once the cycle is live (#R2). Previously launch only
   // flipped the status and no reviews were ever created. Generate while the
   // cycle is still draft so any failure leaves it closed to reviewers and a
   // retry can safely fill only the missing idempotent rows.
-  await generateReviewsForCycle(orgId, id, participants.data);
-  return db.update<ReviewCycle>("review_cycles", id, { status: "active" } as any);
+    await generateReviewsForCycle(orgId, id, participants.data, trx);
+    return trx.update<ReviewCycle>("review_cycles", id, { status: "active" } as any);
+  });
 }
 
 // Creates the self + manager (+ approved peer) review rows for each cycle
@@ -373,8 +394,9 @@ export async function generateReviewsForCycle(
   orgId: number,
   cycleId: string,
   participantRows?: ReviewCycleParticipant[],
+  context?: IDataContext,
 ): Promise<number> {
-  const db = getDB();
+  const db = context ?? getDB();
 
   const participants = participantRows
     ? { data: participantRows }
@@ -463,6 +485,10 @@ export async function closeCycle(
     organization_id: orgId,
   });
   if (!cycle) throw new NotFoundError("ReviewCycle", id);
+  // POST /close is an idempotent release command. A caller may legitimately
+  // retry after the first response is lost; returning the already-released
+  // resource avoids reporting a false failure for a successful publication.
+  if (cycle.status === "completed") return cycle;
   if (cycle.status !== "calibration") {
     throw new ValidationError("Only a cycle in calibration can be released");
   }
@@ -487,9 +513,28 @@ export async function closeCycle(
       organization_id: orgId,
     });
     if (!current) throw new NotFoundError("ReviewCycle", id);
+    if (current.status === "completed") return current;
     if (current.status !== "calibration" || !current.calibration_finalized_at) {
       throw new ValidationError(
         "Calibration must be finalized before the cycle can be released",
+      );
+    }
+
+    const lockedParticipants = await trx.findMany<ReviewCycleParticipant>(
+      "review_cycle_participants",
+      { filters: { cycle_id: id }, limit: 100000 },
+    );
+    const releasedRoster = new Map(
+      finalRatings.map((rating) => [rating.participant_id, rating.employee_id]),
+    );
+    const rosterMatchesSnapshot =
+      lockedParticipants.data.length === releasedRoster.size &&
+      lockedParticipants.data.every(
+        (participant) => releasedRoster.get(participant.id) === participant.employee_id,
+      );
+    if (!rosterMatchesSnapshot) {
+      throw new ValidationError(
+        "Cycle participants changed after calibration finalization; finalize calibration again before release",
       );
     }
 
@@ -501,6 +546,34 @@ export async function closeCycle(
     }
 
     await persistRatingDistribution(trx, orgId, id, distribution);
+
+    const releasedAt = new Date();
+    const outcomes = await createReviewOutcomesForRelease(
+      trx,
+      orgId,
+      id,
+      finalRatings.map((rating) => ({
+        participant_id: rating.participant_id,
+        employee_id: rating.employee_id,
+        released_rating: rating.calibrated_rating,
+      })),
+      releasedAt,
+    );
+
+    await trx.createMany(
+      "notifications",
+      outcomes.map((outcome) => ({
+        id: uuidv4(),
+        organization_id: orgId,
+        user_id: outcome.employee_id,
+        type: "review_outcome_released",
+        title: `${current.name} results are available`,
+        body: "Review your released outcome, acknowledge receipt, or submit an appeal within the stated window.",
+        link: `/my/performance/reviews/${outcome.id}`,
+        is_read: false,
+        read_at: null,
+      })),
+    );
 
     const released = await trx.update<ReviewCycle>("review_cycles", id, {
       status: "completed",
@@ -517,34 +590,48 @@ export async function closeCycle(
       new_values: JSON.stringify({
         status: "completed",
         calibration_finalized_at: current.calibration_finalized_at,
+        calibration_snapshot_hash: current.calibration_snapshot_hash,
         participant_count: finalRatings.length,
         distribution,
+        outcome_ids: outcomes.map((outcome) => outcome.id),
+        ratings: finalRatings.map((rating) => ({
+          participant_id: rating.participant_id,
+          employee_id: rating.employee_id,
+          baseline_rating: rating.baseline_rating,
+          released_rating: rating.calibrated_rating,
+          decision_id: rating.decision_id,
+          decision_version: rating.decision_version,
+        })),
       }),
       ip_address: null,
       user_agent: null,
     } as any);
 
+    await enqueueIntegrationEvent(trx, {
+      organizationId: orgId,
+      eventType: "performance.cycle_completed",
+      aggregateType: "review_cycle",
+      aggregateId: id,
+      idempotencyKey: `performance.cycle_completed:${id}:v1`,
+      payload: {
+        event: "performance.cycle_completed",
+        source: "emp-performance",
+        timestamp: releasedAt.toISOString(),
+        data: {
+          organizationId: orgId,
+          cycleId: id,
+          cycleName: current.name,
+          participantCount: finalRatings.length,
+          outcomes: outcomes.map((outcome) => ({
+            outcomeId: outcome.id,
+            employeeId: outcome.employee_id,
+          })),
+        },
+      },
+    });
+
     return released;
   });
-
-  // Notify EMP Cloud about the cycle completion (non-blocking)
-  const webhookUrl = process.env.EMPCLOUD_WEBHOOK_URL;
-  if (webhookUrl) {
-    fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        event: "performance.cycle_completed",
-        data: {
-          cycleId: id,
-          cycleName: cycle.name,
-          participantCount: finalRatings.length,
-        },
-        source: "emp-performance",
-        timestamp: new Date().toISOString(),
-      }),
-    }).catch(() => {}); // fire-and-forget
-  }
 
   return closedCycle;
 }
@@ -622,7 +709,7 @@ async function assertRequiredReviewsReady(
     }),
   ]);
 
-  const incomplete: string[] = [];
+  const incomplete = new Set<string>();
   for (const participant of participants.data) {
     const required = [
       { type: "self", reviewerId: participant.employee_id },
@@ -643,13 +730,27 @@ async function assertRequiredReviewsReady(
           rating <= 5
         );
       });
-      if (!valid) incomplete.push(`${participant.employee_id}:${assignment.type}`);
+      if (!valid) incomplete.add(`${participant.employee_id}:${assignment.type}`);
+    }
+
+    for (const review of reviews.data.filter(
+      (candidate) => candidate.employee_id === participant.employee_id,
+    )) {
+      const rating = Number(review.overall_rating);
+      if (
+        review.status !== "submitted" ||
+        !Number.isFinite(rating) ||
+        rating < 1 ||
+        rating > 5
+      ) {
+        incomplete.add(`${participant.employee_id}:${review.type}:${review.id}`);
+      }
     }
   }
 
-  if (participants.data.length === 0 || incomplete.length > 0) {
+  if (participants.data.length === 0 || incomplete.size > 0) {
     throw new ValidationError(
-      `Cannot start calibration while ${Math.max(incomplete.length, 1)} required review assignment(s) are incomplete or invalid`,
+      `Cannot start calibration while ${Math.max(incomplete.size, 1)} required review assignment(s) are incomplete or invalid`,
     );
   }
 }
@@ -683,60 +784,66 @@ export async function addParticipants(
   participants: ParticipantInput[],
 ): Promise<ReviewCycleParticipant[]> {
   const db = getDB();
-  const cycle = await db.findOne<ReviewCycle>("review_cycles", {
-    id: cycleId,
-    organization_id: orgId,
-  });
-  if (!cycle) throw new NotFoundError("ReviewCycle", cycleId);
-  if (cycle.status !== "draft" && cycle.status !== "active") {
-    throw new ValidationError("Can only add participants to draft or active cycles");
-  }
-
-  const created: ReviewCycleParticipant[] = [];
-  for (const p of participants) {
-    // Skip duplicates
-    const existing = await db.findOne<ReviewCycleParticipant>("review_cycle_participants", {
-      cycle_id: cycleId,
-      employee_id: p.employee_id,
+  return db.transaction(async (trx) => {
+    await trx.raw(
+      "SELECT id FROM review_cycles WHERE id = ? AND organization_id = ? FOR UPDATE",
+      [cycleId, orgId],
+    );
+    const cycle = await trx.findOne<ReviewCycle>("review_cycles", {
+      id: cycleId,
+      organization_id: orgId,
     });
-    if (existing) continue;
+    if (!cycle) throw new NotFoundError("ReviewCycle", cycleId);
+    if (cycle.status !== "draft" && cycle.status !== "active") {
+      throw new ValidationError("Can only add participants to draft or active cycles");
+    }
 
-    const validated = await getValidatedParticipant(orgId, p);
-
-    const record: Record<string, any> = {
-      id: uuidv4(),
-      cycle_id: cycleId,
-      employee_id: validated.employee_id,
-      manager_id: validated.manager_id,
-      status: "pending",
-    };
-    try {
-      const participant = await db.create<ReviewCycleParticipant>(
-        "review_cycle_participants",
-        record as any,
-      );
-      created.push(participant);
-    } catch (error) {
-      // The assignment tuple is unique. Treat a concurrent request that won
-      // the insert as the same idempotent outcome; surface genuine DB errors.
-      const concurrent = await db.findOne<ReviewCycleParticipant>("review_cycle_participants", {
+    const created: ReviewCycleParticipant[] = [];
+    for (const p of participants) {
+      // Skip duplicates
+      const existing = await trx.findOne<ReviewCycleParticipant>("review_cycle_participants", {
         cycle_id: cycleId,
         employee_id: p.employee_id,
       });
-      if (!concurrent) throw error;
+      if (existing) continue;
+
+      const validated = await getValidatedParticipant(orgId, p);
+
+      const record: Record<string, any> = {
+        id: uuidv4(),
+        cycle_id: cycleId,
+        employee_id: validated.employee_id,
+        manager_id: validated.manager_id,
+        status: "pending",
+      };
+      try {
+        const participant = await trx.create<ReviewCycleParticipant>(
+          "review_cycle_participants",
+          record as any,
+        );
+        created.push(participant);
+      } catch (error) {
+        // The assignment tuple is unique. Treat a concurrent request that won
+        // the insert as the same idempotent outcome; surface genuine DB errors.
+        const concurrent = await trx.findOne<ReviewCycleParticipant>("review_cycle_participants", {
+          cycle_id: cycleId,
+          employee_id: p.employee_id,
+        });
+        if (!concurrent) throw error;
+      }
     }
-  }
 
   // If the cycle is already launched, generate the review rows for the newly
   // added participants too — otherwise reviews only ever get created by
   // launchCycle, so someone added to an active cycle got a participant row but
   // zero self/manager/peer reviews and could never be reviewed (audit M2).
   // generateReviewsForCycle is idempotent (skips existing tuples).
-  if (cycle.status === "active") {
-    await generateReviewsForCycle(orgId, cycleId);
-  }
+    if (cycle.status === "active") {
+      await generateReviewsForCycle(orgId, cycleId, undefined, trx);
+    }
 
-  return created;
+    return created;
+  });
 }
 
 export type ParticipantWithNames = ReviewCycleParticipant & {
@@ -848,40 +955,46 @@ export async function removeParticipant(
   participantId: string,
 ): Promise<void> {
   const db = getDB();
-  const cycle = await db.findOne<ReviewCycle>("review_cycles", {
-    id: cycleId,
-    organization_id: orgId,
-  });
-  if (!cycle) throw new NotFoundError("ReviewCycle", cycleId);
-  if (cycle.status !== "draft") {
-    throw new ValidationError("Can only remove participants from draft cycles");
-  }
+  await db.transaction(async (trx) => {
+    await trx.raw(
+      "SELECT id FROM review_cycles WHERE id = ? AND organization_id = ? FOR UPDATE",
+      [cycleId, orgId],
+    );
+    const cycle = await trx.findOne<ReviewCycle>("review_cycles", {
+      id: cycleId,
+      organization_id: orgId,
+    });
+    if (!cycle) throw new NotFoundError("ReviewCycle", cycleId);
+    if (cycle.status !== "draft") {
+      throw new ValidationError("Can only remove participants from draft cycles");
+    }
 
-  const participant = await db.findOne<ReviewCycleParticipant>("review_cycle_participants", {
-    id: participantId,
-    cycle_id: cycleId,
-  });
-  if (!participant) throw new NotFoundError("Participant", participantId);
+    const participant = await trx.findOne<ReviewCycleParticipant>("review_cycle_participants", {
+      id: participantId,
+      cycle_id: cycleId,
+    });
+    if (!participant) throw new NotFoundError("Participant", participantId);
 
   // Draft peer approvals may already have produced canonical assignments.
   // Preserve that review history and prevent orphaned rows; an administrator
   // must resolve the assignments/nominations before removing the participant.
-  const existingReview = await db.findOne<Review>("reviews", {
-    organization_id: orgId,
-    cycle_id: cycleId,
-    employee_id: participant.employee_id,
-  });
-  const existingNomination = await db.findOne("peer_review_nominations", {
-    cycle_id: cycleId,
-    employee_id: participant.employee_id,
-  });
-  if (existingReview || existingNomination) {
-    throw new ValidationError(
-      "Cannot remove a participant with review assignments or peer nominations",
-    );
-  }
+    const existingReview = await trx.findOne<Review>("reviews", {
+      organization_id: orgId,
+      cycle_id: cycleId,
+      employee_id: participant.employee_id,
+    });
+    const existingNomination = await trx.findOne("peer_review_nominations", {
+      cycle_id: cycleId,
+      employee_id: participant.employee_id,
+    });
+    if (existingReview || existingNomination) {
+      throw new ValidationError(
+        "Cannot remove a participant with review assignments or peer nominations",
+      );
+    }
 
-  await db.delete("review_cycle_participants", participantId);
+    await trx.delete("review_cycle_participants", participantId);
+  });
 }
 
 // ---------------------------------------------------------------------------

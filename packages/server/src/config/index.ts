@@ -65,6 +65,20 @@ export const config = {
     from: process.env.SMTP_FROM || "performance@empcloud.com",
   },
 
+  // Durable outbound EMP Cloud integration. Release events are first written
+  // to the database outbox, then delivered by an in-process dispatcher.
+  empcloudWebhook: {
+    url: process.env.EMPCLOUD_WEBHOOK_URL || undefined,
+    secret: process.env.EMPCLOUD_WEBHOOK_SECRET || undefined,
+    timeoutMs: parseInt(process.env.EMPCLOUD_WEBHOOK_TIMEOUT_MS || "10000"),
+    pollIntervalMs: parseInt(process.env.OUTBOX_POLL_INTERVAL_MS || "5000"),
+    batchSize: parseInt(process.env.OUTBOX_BATCH_SIZE || "25"),
+    leaseSeconds: parseInt(process.env.OUTBOX_LEASE_SECONDS || "60"),
+    maxAttempts: parseInt(process.env.OUTBOX_MAX_ATTEMPTS || "8"),
+    retryBaseMs: parseInt(process.env.OUTBOX_RETRY_BASE_MS || "5000"),
+    retryMaxMs: parseInt(process.env.OUTBOX_RETRY_MAX_MS || "3600000"),
+  },
+
   // CORS
   cors: {
     origin: process.env.CORS_ORIGIN || "http://localhost:5177",

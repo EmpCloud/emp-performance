@@ -73,13 +73,13 @@ const spec = {
       get: {
         tags: ["Review Cycles"],
         summary: "Get review cycle by ID",
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
         responses: { "200": { description: "Review cycle data" } },
       },
       put: {
         tags: ["Review Cycles"],
         summary: "Update review cycle",
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
         responses: { "200": { description: "Review cycle updated" } },
       },
     },
@@ -87,7 +87,7 @@ const spec = {
       post: {
         tags: ["Review Cycles"],
         summary: "Launch a review cycle",
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
         responses: { "200": { description: "Cycle launched" } },
       },
     },
@@ -135,6 +135,21 @@ const spec = {
           { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } },
           { name: "participantId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
         ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["rating", "reason"],
+                properties: {
+                  rating: { type: "number", minimum: 1, maximum: 5 },
+                  reason: { type: "string", minLength: 10, maxLength: 2000 },
+                },
+              },
+            },
+          },
+        },
         responses: { "201": { description: "Calibration decision recorded" } },
       },
     },
@@ -161,23 +176,23 @@ const spec = {
       get: {
         tags: ["Review Cycles"],
         summary: "List cycle participants",
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
         responses: { "200": { description: "Participant list" } },
       },
       post: {
         tags: ["Review Cycles"],
         summary: "Add participants to cycle",
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
         responses: { "201": { description: "Participants added" } },
       },
     },
-    "/api/v1/review-cycles/{id}/participants/{userId}": {
+    "/api/v1/review-cycles/{id}/participants/{participantId}": {
       delete: {
         tags: ["Review Cycles"],
         summary: "Remove participant from cycle",
         parameters: [
-          { name: "id", in: "path", required: true, schema: { type: "integer" } },
-          { name: "userId", in: "path", required: true, schema: { type: "integer" } },
+          { name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "participantId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
         ],
         responses: { "200": { description: "Participant removed" } },
       },
@@ -186,8 +201,78 @@ const spec = {
       get: {
         tags: ["Review Cycles"],
         summary: "Get ratings distribution for a cycle",
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
         responses: { "200": { description: "Ratings distribution" } },
+      },
+    },
+
+    // =========================================================================
+    // RELEASED REVIEW OUTCOMES
+    // =========================================================================
+    "/api/v1/review-outcomes/mine": {
+      get: {
+        tags: ["Review Outcomes"],
+        summary: "List the authenticated employee's released outcomes",
+        responses: { "200": { description: "Released outcome list" } },
+      },
+    },
+    "/api/v1/review-outcomes/appeals": {
+      get: {
+        tags: ["Review Outcomes"],
+        summary: "List the tenant appeal queue (HR administrators only)",
+        parameters: [
+          { name: "cycleId", in: "query", schema: { type: "string", format: "uuid" } },
+          { name: "status", in: "query", schema: { type: "string", enum: ["submitted", "under_review", "upheld", "not_upheld", "withdrawn"] } },
+        ],
+        responses: { "200": { description: "Appeal queue" } },
+      },
+    },
+    "/api/v1/review-outcomes/{id}": {
+      get: {
+        tags: ["Review Outcomes"],
+        summary: "Get a released outcome and privacy-safe feedback",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: { "200": { description: "Released outcome" } },
+      },
+    },
+    "/api/v1/review-outcomes/{id}/acknowledge": {
+      post: {
+        tags: ["Review Outcomes"],
+        summary: "Confirm receipt without agreeing or waiving appeal rights",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: { "201": { description: "Outcome acknowledged" } },
+      },
+    },
+    "/api/v1/review-outcomes/{id}/appeals": {
+      post: {
+        tags: ["Review Outcomes"],
+        summary: "Submit one appeal within the outcome's appeal window",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: { "201": { description: "Appeal submitted" } },
+      },
+    },
+    "/api/v1/review-outcomes/{id}/appeals/withdraw": {
+      post: {
+        tags: ["Review Outcomes"],
+        summary: "Withdraw an appeal before HR review begins",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: { "200": { description: "Appeal withdrawn" } },
+      },
+    },
+    "/api/v1/review-outcomes/{id}/appeals/start-review": {
+      post: {
+        tags: ["Review Outcomes"],
+        summary: "Move a submitted appeal into HR review",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: { "200": { description: "Appeal review started" } },
+      },
+    },
+    "/api/v1/review-outcomes/{id}/appeals/resolve": {
+      post: {
+        tags: ["Review Outcomes"],
+        summary: "Resolve an appeal without mutating the released rating",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", format: "uuid" } }],
+        responses: { "200": { description: "Appeal resolved" } },
       },
     },
 

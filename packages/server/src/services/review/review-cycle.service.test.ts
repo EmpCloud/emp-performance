@@ -1,8 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockFindUserById, mockGetFinalizedCalibrationRatings } = vi.hoisted(() => ({
+const {
+  mockFindUserById,
+  mockGetFinalizedCalibrationRatings,
+  mockEnqueueIntegrationEvent,
+  mockCreateReviewOutcomesForRelease,
+} = vi.hoisted(() => ({
   mockFindUserById: vi.fn(),
   mockGetFinalizedCalibrationRatings: vi.fn(),
+  mockEnqueueIntegrationEvent: vi.fn(),
+  mockCreateReviewOutcomesForRelease: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -34,6 +41,14 @@ vi.mock("../../db/empcloud", () => ({
 
 vi.mock("./calibration.service", () => ({
   getFinalizedCalibrationRatings: mockGetFinalizedCalibrationRatings,
+}));
+
+vi.mock("../integration/outbox.service", () => ({
+  enqueueIntegrationEvent: mockEnqueueIntegrationEvent,
+}));
+
+vi.mock("./review-outcome.service", () => ({
+  createReviewOutcomesForRelease: mockCreateReviewOutcomesForRelease,
 }));
 
 vi.mock("../../utils/logger", () => ({
@@ -97,6 +112,9 @@ describe("review-cycle.service", () => {
       first_name: "Test",
       last_name: "User",
     }));
+    mockCreateReviewOutcomesForRelease.mockResolvedValue([
+      { id: "outcome-1", employee_id: 100 },
+    ]);
   });
 
   // -------------------------------------------------------------------------
@@ -343,6 +361,9 @@ describe("review-cycle.service", () => {
           decision_version: 1,
         },
       ]);
+      mockDB.findMany.mockResolvedValueOnce({
+        data: [{ id: "p-1", cycle_id: "cycle-1", employee_id: 100 }],
+      });
 
       mockDB.update
         .mockResolvedValueOnce({}) // participant update
@@ -364,7 +385,76 @@ describe("review-cycle.service", () => {
           action: "review_cycle.ratings_released",
         }),
       );
+      expect(mockEnqueueIntegrationEvent).toHaveBeenCalledWith(
+        mockDB,
+        expect.objectContaining({
+          eventType: "performance.cycle_completed",
+          idempotencyKey: "performance.cycle_completed:cycle-1:v1",
+        }),
+      );
+      expect(mockCreateReviewOutcomesForRelease).toHaveBeenCalledWith(
+        mockDB,
+        ORG_ID,
+        "cycle-1",
+        [
+          {
+            participant_id: "p-1",
+            employee_id: 100,
+            released_rating: 4.25,
+          },
+        ],
+        expect.any(Date),
+      );
+      expect(mockDB.createMany).toHaveBeenCalledWith(
+        "notifications",
+        [
+          expect.objectContaining({
+            user_id: 100,
+            type: "review_outcome_released",
+            link: "/my/performance/reviews/outcome-1",
+          }),
+        ],
+      );
       expect(result.status).toBe("completed");
+    });
+
+    it("rejects release when the locked participant roster differs from the finalized snapshot", async () => {
+      mockDB.findOne.mockResolvedValue(
+        makeCycle({
+          status: "calibration",
+          calibration_finalized_at: "2026-03-31T12:00:00.000Z",
+        }),
+      );
+      mockGetFinalizedCalibrationRatings.mockResolvedValue([
+        {
+          participant_id: "p-1",
+          employee_id: 100,
+          baseline_rating: 4,
+          calibrated_rating: 4.25,
+          decision_id: null,
+          decision_version: null,
+        },
+      ]);
+      mockDB.findMany.mockResolvedValueOnce({
+        data: [{ id: "p-2", cycle_id: "cycle-1", employee_id: 200 }],
+      });
+
+      await expect(closeCycle(ORG_ID, "cycle-1", USER_ID)).rejects.toThrow(
+        "participants changed after calibration finalization",
+      );
+      expect(mockCreateReviewOutcomesForRelease).not.toHaveBeenCalled();
+      expect(mockEnqueueIntegrationEvent).not.toHaveBeenCalled();
+    });
+
+    it("returns an already released cycle for a safe retry", async () => {
+      const released = makeCycle({ status: "completed" });
+      mockDB.findOne.mockResolvedValue(released);
+
+      await expect(closeCycle(ORG_ID, "cycle-1", USER_ID)).resolves.toBe(released);
+
+      expect(mockGetFinalizedCalibrationRatings).not.toHaveBeenCalled();
+      expect(mockDB.transaction).not.toHaveBeenCalled();
+      expect(mockEnqueueIntegrationEvent).not.toHaveBeenCalled();
     });
 
     it("should reject release until calibration is finalized", async () => {
@@ -385,10 +475,13 @@ describe("review-cycle.service", () => {
       await expect(closeCycle(ORG_ID, "cycle-1", USER_ID)).rejects.toThrow();
     });
 
-    it("should reject closing a completed cycle", async () => {
+    it("does not publish a completed cycle twice", async () => {
       mockDB.findOne.mockResolvedValue(makeCycle({ status: "completed" }));
 
-      await expect(closeCycle(ORG_ID, "cycle-1", USER_ID)).rejects.toThrow();
+      await expect(closeCycle(ORG_ID, "cycle-1", USER_ID)).resolves.toMatchObject({
+        status: "completed",
+      });
+      expect(mockEnqueueIntegrationEvent).not.toHaveBeenCalled();
     });
   });
 
@@ -605,6 +698,47 @@ describe("review-cycle.service", () => {
         "audit_logs",
         expect.objectContaining({ action: "review_cycle.status_transitioned" }),
       );
+    });
+
+    it("blocks calibration while an assigned peer review is incomplete", async () => {
+      mockDB.findOne.mockResolvedValue(makeCycle({ status: "in_review" }));
+      mockDB.findMany
+        .mockResolvedValueOnce({
+          data: [{ id: "p-1", employee_id: 100, manager_id: 200 }],
+        })
+        .mockResolvedValueOnce({
+          data: [
+            {
+              id: "self-1",
+              employee_id: 100,
+              reviewer_id: 100,
+              type: "self",
+              status: "submitted",
+              overall_rating: 4,
+            },
+            {
+              id: "manager-1",
+              employee_id: 100,
+              reviewer_id: 200,
+              type: "manager",
+              status: "submitted",
+              overall_rating: 4.5,
+            },
+            {
+              id: "peer-1",
+              employee_id: 100,
+              reviewer_id: 300,
+              type: "peer",
+              status: "draft",
+              overall_rating: 4,
+            },
+          ],
+        });
+
+      await expect(
+        transitionCycle(ORG_ID, "cycle-1", "calibration", USER_ID),
+      ).rejects.toThrow("required review assignment");
+      expect(mockDB.update).not.toHaveBeenCalled();
     });
   });
 

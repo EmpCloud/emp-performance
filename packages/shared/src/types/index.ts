@@ -228,6 +228,7 @@ export interface ReviewCycle {
   created_by: number;
   calibration_finalized_at: string | null;
   calibration_finalized_by: number | null;
+  calibration_snapshot_hash: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -263,12 +264,14 @@ export interface CalibrationDecision {
 export interface CalibrationParticipant {
   participant_id: string;
   employee_id: number;
+  manager_id: number | null;
   employee_name: string | null;
   baseline_rating: number | null;
   calibrated_rating: number | null;
   final_rating: number | null;
   has_decision: boolean;
   latest_decision: CalibrationDecision | null;
+  incomplete_required_reviews: Array<"self" | "manager" | "peer">;
 }
 
 export interface CalibrationRoster {
@@ -276,7 +279,58 @@ export interface CalibrationRoster {
   status: ReviewCycleStatus;
   finalized_at: string | null;
   finalized_by: number | null;
+  participant_count: number;
+  ready_count: number;
+  is_complete: boolean;
   participants: CalibrationParticipant[];
+}
+
+export type ReviewOutcomeAppealStatus =
+  | "submitted"
+  | "under_review"
+  | "upheld"
+  | "not_upheld"
+  | "withdrawn";
+
+/**
+ * The rating snapshot released to an employee for one review-cycle
+ * participation. Acknowledgement confirms receipt only; it is independent of
+ * the employee's appeal right.
+ */
+export interface ReviewOutcome {
+  id: string;
+  organization_id: number;
+  cycle_id: string;
+  participant_id: string;
+  employee_id: number;
+  released_rating: number;
+  released_at: string;
+  appeal_deadline_at: string;
+  acknowledged_at: string | null;
+  acknowledged_by: number | null;
+  acknowledgement_note: string | null;
+  appeal_status: ReviewOutcomeAppealStatus | null;
+  appeal_reason: string | null;
+  appeal_submitted_at: string | null;
+  appeal_submitted_by: number | null;
+  appeal_review_started_at: string | null;
+  appeal_review_started_by: number | null;
+  appeal_resolved_at: string | null;
+  appeal_resolved_by: number | null;
+  appeal_resolution_note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReviewOutcomeView extends ReviewOutcome {
+  cycle_name: string | null;
+  cycle_start_date: string | null;
+  cycle_end_date: string | null;
+  employee_name: string | null;
+}
+
+export interface ReviewOutcomeDetail extends ReviewOutcomeView {
+  reviews: ReviewView[];
 }
 
 export interface Review {

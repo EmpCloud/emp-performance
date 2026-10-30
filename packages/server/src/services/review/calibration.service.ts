@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { v4 as uuidv4 } from "uuid";
 import type {
   CalibrationDecision as SharedCalibrationDecision,
@@ -23,7 +24,7 @@ export type CalibrationDecision = SharedCalibrationDecision;
 
 export interface CalibrationRosterItem extends CalibrationParticipant {
   manager_id: number | null;
-  incomplete_required_reviews: Array<"self" | "manager">;
+  incomplete_required_reviews: Array<"self" | "manager" | "peer">;
 }
 
 export interface CalibrationRoster extends SharedCalibrationRoster {
@@ -40,6 +41,19 @@ export interface CalibrationFinalRating {
   calibrated_rating: number;
   decision_id: string | null;
   decision_version: number | null;
+}
+
+interface CalibrationSnapshot {
+  id: string;
+  organization_id: number;
+  cycle_id: string;
+  participant_id: string;
+  employee_id: number;
+  baseline_rating: number;
+  effective_rating: number;
+  decision_id: string | null;
+  decision_version: number | null;
+  finalized_at: string | Date;
 }
 
 type CalibrationCycle = ReviewCycle;
@@ -123,11 +137,24 @@ function asValidRating(value: unknown): number | null {
 }
 
 function computeBaseline(reviews: Review[]): number | null {
-  const ratings = reviews
-    .map((review) => asValidRating(review.overall_rating))
-    .filter((rating): rating is number => rating !== null);
-  if (ratings.length === 0) return null;
-  return Math.round((ratings.reduce((sum, rating) => sum + rating, 0) / ratings.length) * 100) / 100;
+  // Normalize each review channel before combining them so adding more peer
+  // reviewers does not silently give peer feedback more influence. Explicit
+  // configurable weights can be layered on this stable per-type baseline.
+  const ratingsByType = new Map<string, number[]>();
+  for (const review of reviews) {
+    const rating = asValidRating(review.overall_rating);
+    if (rating === null) continue;
+    const values = ratingsByType.get(review.type) ?? [];
+    values.push(rating);
+    ratingsByType.set(review.type, values);
+  }
+  const typeAverages = [...ratingsByType.values()].map(
+    (ratings) => ratings.reduce((sum, rating) => sum + rating, 0) / ratings.length,
+  );
+  if (typeAverages.length === 0) return null;
+  return Math.round(
+    (typeAverages.reduce((sum, rating) => sum + rating, 0) / typeAverages.length) * 100,
+  ) / 100;
 }
 
 function buildRosterItem(
@@ -138,7 +165,7 @@ function buildRosterItem(
   const submitted = reviews.filter(
     (review) => review.status === "submitted" && review.employee_id === participant.employee_id,
   );
-  const incomplete: Array<"self" | "manager"> = [];
+  const incomplete: Array<"self" | "manager" | "peer"> = [];
 
   const hasValidRequiredReview = (type: "self" | "manager", reviewerId: number) =>
     submitted.some(
@@ -158,7 +185,29 @@ function buildRosterItem(
     incomplete.push("manager");
   }
 
-  const baseline = incomplete.length === 0 ? computeBaseline(submitted) : null;
+  // Once an optional peer review has been assigned it becomes part of the
+  // cycle's declared evidence set. Calibration must not freeze while any such
+  // assignment is still pending or invalid.
+  for (const review of reviews.filter(
+    (candidate) => candidate.employee_id === participant.employee_id,
+  )) {
+    if (
+      review.status !== "submitted" ||
+      asValidRating(review.overall_rating) === null
+    ) {
+      if (
+        review.type === "self" ||
+        review.type === "manager" ||
+        review.type === "peer"
+      ) {
+        incomplete.push(review.type);
+      }
+    }
+  }
+
+  const uniqueIncomplete = [...new Set(incomplete)];
+
+  const baseline = uniqueIncomplete.length === 0 ? computeBaseline(submitted) : null;
   const calibrated = latestDecision
     ? asValidRating(latestDecision.calibrated_rating)
     : null;
@@ -173,7 +222,7 @@ function buildRosterItem(
     final_rating: calibrated ?? baseline,
     has_decision: latestDecision !== null,
     latest_decision: latestDecision,
-    incomplete_required_reviews: incomplete,
+    incomplete_required_reviews: uniqueIncomplete,
   };
 }
 
@@ -252,6 +301,11 @@ export async function getCalibrationRoster(
   cycleId: string,
 ): Promise<CalibrationRoster> {
   const cycle = await getCycleForOrganization(orgId, cycleId);
+  if (cycle.status !== "calibration" && cycle.status !== "completed") {
+    throw new ValidationError(
+      "Calibration data is available only after the cycle enters calibration",
+    );
+  }
   return buildCalibrationRoster(orgId, cycle);
 }
 
@@ -370,7 +424,12 @@ export async function getCalibrationHistory(
   cycleId: string,
   participantId: string,
 ): Promise<CalibrationDecision[]> {
-  await getCycleForOrganization(orgId, cycleId);
+  const cycle = await getCycleForOrganization(orgId, cycleId);
+  if (cycle.status !== "calibration" && cycle.status !== "completed") {
+    throw new ValidationError(
+      "Calibration history is available only after the cycle enters calibration",
+    );
+  }
   await getParticipantForCycle(cycleId, participantId);
   return findAll<CalibrationDecision>(
     "review_calibration_decisions",
@@ -414,9 +473,28 @@ export async function finalizeCalibration(
     }
 
     const finalizedAt = new Date().toISOString();
+    const snapshots = roster.participants.map((participant) => ({
+      id: uuidv4(),
+      organization_id: orgId,
+      cycle_id: cycleId,
+      participant_id: participant.participant_id,
+      employee_id: participant.employee_id,
+      baseline_rating: participant.baseline_rating as number,
+      effective_rating: participant.final_rating as number,
+      decision_id: participant.latest_decision?.id ?? null,
+      decision_version: participant.latest_decision?.version ?? null,
+      finalized_at: finalizedAt,
+    }));
+    const snapshotHash = hashCalibrationSnapshots(snapshots);
+
+    await trx.createMany<CalibrationSnapshot>(
+      "review_calibration_snapshots",
+      snapshots,
+    );
     const finalized = await trx.update<ReviewCycle>("review_cycles", cycleId, {
       calibration_finalized_at: finalizedAt,
       calibration_finalized_by: actorId,
+      calibration_snapshot_hash: snapshotHash,
     });
 
     await trx.create("audit_logs", {
@@ -431,6 +509,7 @@ export async function finalizeCalibration(
         calibration_finalized_at: finalizedAt,
         calibration_finalized_by: actorId,
         participant_count: roster.participant_count,
+        calibration_snapshot_hash: snapshotHash,
       }),
       ip_address: null,
       user_agent: null,
@@ -453,17 +532,56 @@ export async function getFinalizedCalibrationRatings(
     throw new ConflictError("Calibration must be finalized before ratings are released");
   }
 
-  const roster = await buildCalibrationRoster(orgId, cycle, getDB(), false);
-  if (!roster.is_complete) {
-    throw new ConflictError("Finalized calibration roster is no longer complete");
+  const snapshots = await findAll<CalibrationSnapshot>(
+    "review_calibration_snapshots",
+    { organization_id: orgId, cycle_id: cycleId },
+    { field: "participant_id", order: "asc" },
+  );
+  if (snapshots.length === 0) {
+    throw new ConflictError("Finalized calibration snapshot is missing");
+  }
+  const snapshotHash = hashCalibrationSnapshots(snapshots);
+  if (!cycle.calibration_snapshot_hash || cycle.calibration_snapshot_hash !== snapshotHash) {
+    throw new ConflictError("Finalized calibration snapshot failed its integrity check");
   }
 
-  return roster.participants.map((participant) => ({
-    participant_id: participant.participant_id,
-    employee_id: participant.employee_id,
-    baseline_rating: participant.baseline_rating as number,
-    calibrated_rating: participant.final_rating as number,
-    decision_id: participant.latest_decision?.id ?? null,
-    decision_version: participant.latest_decision?.version ?? null,
+  return snapshots.map((snapshot) => ({
+    participant_id: snapshot.participant_id,
+    employee_id: snapshot.employee_id,
+    baseline_rating: Number(snapshot.baseline_rating),
+    calibrated_rating: Number(snapshot.effective_rating),
+    decision_id: snapshot.decision_id,
+    decision_version:
+      snapshot.decision_version === null ? null : Number(snapshot.decision_version),
   }));
+}
+
+function hashCalibrationSnapshots(
+  snapshots: Array<
+    Pick<
+      CalibrationSnapshot,
+      | "participant_id"
+      | "employee_id"
+      | "baseline_rating"
+      | "effective_rating"
+      | "decision_id"
+      | "decision_version"
+    >
+  >,
+): string {
+  const canonical = snapshots
+    .map((snapshot) => ({
+      participant_id: snapshot.participant_id,
+      employee_id: Number(snapshot.employee_id),
+      baseline_rating: Number(snapshot.baseline_rating),
+      effective_rating: Number(snapshot.effective_rating),
+      decision_id: snapshot.decision_id ?? null,
+      decision_version:
+        snapshot.decision_version === null || snapshot.decision_version === undefined
+          ? null
+          : Number(snapshot.decision_version),
+    }))
+    .sort((left, right) => left.participant_id.localeCompare(right.participant_id));
+
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }

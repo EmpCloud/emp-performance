@@ -17,10 +17,12 @@ import {
   ArrowRight,
   Scale,
   ShieldCheck,
+  Flag,
 } from "lucide-react";
 import { apiGet, apiPost, apiPut, apiDelete } from "@/api/client";
 import { useConfirm } from "@/components/ConfirmDialog";
 import type {
+  CanonicalRole,
   ReviewCycle,
   ReviewCycleParticipant,
   RatingDistribution,
@@ -30,6 +32,8 @@ import { formatDate } from "@/lib/utils";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Pagination } from "@/components/Pagination";
 import { CalibrationPanel, useCalibrationSnapshot } from "./CalibrationPanel";
+import { ReviewOutcomeAppealsPanel } from "./ReviewOutcomeAppealsPanel";
+import { useAuthStore } from "@/lib/auth-store";
 
 const STATUS_BADGE: Record<string, string> = {
   draft: "bg-gray-100 text-gray-700",
@@ -60,8 +64,13 @@ type OrgUser = {
   designation: string | null;
 };
 
-const TABS = ["participants", "calibration", "ratings", "settings"] as const;
+const TABS = ["participants", "calibration", "ratings", "appeals", "settings"] as const;
 type Tab = (typeof TABS)[number];
+const APPEAL_GOVERNANCE_ROLES: ReadonlySet<CanonicalRole> = new Set([
+  "super_admin",
+  "org_admin",
+  "hr_admin",
+]);
 
 export function ReviewCycleDetailPage() {
   const { t } = useTranslation();
@@ -71,6 +80,8 @@ export function ReviewCycleDetailPage() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<Tab>("participants");
+  const userRole = useAuthStore((state) => state.user?.role);
+  const canGovernAppeals = userRole ? APPEAL_GOVERNANCE_ROLES.has(userRole) : false;
 
   const editMode = searchParams.get("edit") === "1";
 
@@ -119,6 +130,16 @@ export function ReviewCycleDetailPage() {
   });
 
   const cycle = cycleData?.data;
+  const visibleTabs = useMemo<Tab[]>(
+    () =>
+      cycle?.status === "completed" && canGovernAppeals
+        ? [...TABS]
+        : TABS.filter((tab) => tab !== "appeals"),
+    [canGovernAppeals, cycle?.status],
+  );
+  useEffect(() => {
+    if (!visibleTabs.includes(activeTab)) setActiveTab("participants");
+  }, [activeTab, visibleTabs]);
   const participants = participantsData?.data?.data ?? [];
   const participantTotalPages = participantsData?.data?.totalPages ?? 1;
   const distribution = distributionData?.data ?? [];
@@ -126,7 +147,10 @@ export function ReviewCycleDetailPage() {
 
   const launchMutation = useMutation({
     mutationFn: () => apiPost(`/review-cycles/${id}/launch`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["review-cycle", id] }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["review-cycle", id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycles"] });
+    },
   });
 
   const transitionMutation = useMutation({
@@ -134,6 +158,7 @@ export function ReviewCycleDetailPage() {
       apiPost(`/review-cycles/${id}/transition`, { status }),
     onSuccess: async (_data, status) => {
       await queryClient.invalidateQueries({ queryKey: ["review-cycle", id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycles"] });
       if (status === "calibration") {
         setActiveTab("calibration");
         await queryClient.invalidateQueries({ queryKey: ["review-cycle-calibration", id] });
@@ -145,6 +170,7 @@ export function ReviewCycleDetailPage() {
     mutationFn: () => apiPost(`/review-cycles/${id}/close`),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["review-cycle", id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycles"] });
       await queryClient.invalidateQueries({ queryKey: ["review-cycle-calibration", id] });
       await queryClient.invalidateQueries({ queryKey: ["review-cycle-distribution", id] });
     },
@@ -153,9 +179,10 @@ export function ReviewCycleDetailPage() {
   const addParticipantMutation = useMutation({
     mutationFn: (data: { participants: { employee_id: number; manager_id?: number }[] }) =>
       apiPost(`/review-cycles/${id}/participants`, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["review-cycle-participants", id] });
-      queryClient.invalidateQueries({ queryKey: ["review-cycle", id] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["review-cycle-participants", id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycle", id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycles"] });
       setSelected([]);
       setManagerId("");
       setPickerQuery("");
@@ -165,9 +192,10 @@ export function ReviewCycleDetailPage() {
   const removeParticipantMutation = useMutation({
     mutationFn: (participantId: string) =>
       apiDelete(`/review-cycles/${id}/participants/${participantId}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["review-cycle-participants", id] });
-      queryClient.invalidateQueries({ queryKey: ["review-cycle", id] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["review-cycle-participants", id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycle", id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycles"] });
     },
   });
 
@@ -216,14 +244,17 @@ export function ReviewCycleDetailPage() {
 
   function handleTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
     let nextIndex = index;
-    if (event.key === "ArrowLeft") nextIndex = index === 0 ? TABS.length - 1 : index - 1;
-    else if (event.key === "ArrowRight") nextIndex = index === TABS.length - 1 ? 0 : index + 1;
+    if (event.key === "ArrowLeft") {
+      nextIndex = index === 0 ? visibleTabs.length - 1 : index - 1;
+    } else if (event.key === "ArrowRight") {
+      nextIndex = index === visibleTabs.length - 1 ? 0 : index + 1;
+    }
     else if (event.key === "Home") nextIndex = 0;
-    else if (event.key === "End") nextIndex = TABS.length - 1;
+    else if (event.key === "End") nextIndex = visibleTabs.length - 1;
     else return;
 
     event.preventDefault();
-    const nextTab = TABS[nextIndex];
+    const nextTab = visibleTabs[nextIndex];
     setActiveTab(nextTab);
     document.getElementById(`review-cycle-tab-${nextTab}`)?.focus();
   }
@@ -398,7 +429,7 @@ export function ReviewCycleDetailPage() {
       {/* Tabs */}
       <div className="border-b border-gray-200">
         <div role="tablist" aria-label={t("reviewCycleDetail.tabsLabel")} className="flex gap-6 overflow-x-auto">
-          {TABS.map((tab, index) => (
+          {visibleTabs.map((tab, index) => (
             <button
               key={tab}
               id={`review-cycle-tab-${tab}`}
@@ -419,6 +450,7 @@ export function ReviewCycleDetailPage() {
                 {tab === "participants" && <Users className="h-4 w-4" aria-hidden="true" />}
                 {tab === "calibration" && <Scale className="h-4 w-4" aria-hidden="true" />}
                 {tab === "ratings" && <BarChart3 className="h-4 w-4" aria-hidden="true" />}
+                {tab === "appeals" && <Flag className="h-4 w-4" aria-hidden="true" />}
                 {tab === "settings" && <Settings className="h-4 w-4" aria-hidden="true" />}
                 {tab === "participants"
                   ? t("reviewCycleDetail.tabParticipants")
@@ -426,6 +458,8 @@ export function ReviewCycleDetailPage() {
                     ? t("reviewCycleDetail.tabCalibration")
                   : tab === "ratings"
                     ? t("reviewCycleDetail.tabRatings")
+                  : tab === "appeals"
+                    ? t("reviewCycleDetail.tabAppeals")
                     : t("reviewCycleDetail.tabSettings")}
               </span>
             </button>
@@ -710,6 +744,18 @@ export function ReviewCycleDetailPage() {
         </div>
       )}
 
+      {activeTab === "appeals" && cycle.status === "completed" && canGovernAppeals && (
+        <div
+          id="review-cycle-panel-appeals"
+          role="tabpanel"
+          aria-labelledby="review-cycle-tab-appeals"
+          tabIndex={0}
+          className="focus:outline-none"
+        >
+          <ReviewOutcomeAppealsPanel cycleId={cycle.id} />
+        </div>
+      )}
+
       {activeTab === "settings" && (
         <div
           id="review-cycle-panel-settings"
@@ -811,8 +857,9 @@ function EditCycleForm({ cycle, onClose }: { cycle: CycleDetail; onClose: () => 
   const updateMutation = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
       apiPut(`/review-cycles/${cycle.id}`, body),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["review-cycle", cycle.id] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["review-cycle", cycle.id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycles"] });
       onClose();
     },
   });

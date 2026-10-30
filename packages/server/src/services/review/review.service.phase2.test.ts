@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
     delete: vi.fn(),
     count: vi.fn(),
     raw: vi.fn(),
+    transaction: vi.fn(),
   },
   findUserById: vi.fn(),
 }));
@@ -113,6 +114,7 @@ describe("review.service Phase 2 confidentiality and integrity", () => {
     mocks.db.delete.mockReset();
     mocks.db.count.mockReset().mockResolvedValue(0);
     mocks.db.raw.mockReset().mockResolvedValue([[]]);
+    mocks.db.transaction.mockReset().mockImplementation(async (callback) => callback(mocks.db));
     mocks.findUserById.mockReset();
   });
 
@@ -259,6 +261,28 @@ describe("review.service Phase 2 confidentiality and integrity", () => {
 
       expect(mocks.db.update).not.toHaveBeenCalled();
       expect(mocks.db.create).not.toHaveBeenCalled();
+    });
+
+    it("locks the parent cycle before reloading its status and rejects a late draft write", async () => {
+      reviewAndCycle({ status: "draft" }, { status: "calibration" });
+
+      await expect(
+        saveDraft(ORG_ID, "review-1", { summary: "late edit" }, reviewerActor),
+      ).rejects.toThrow("current: calibration");
+
+      expect(mocks.db.transaction).toHaveBeenCalledTimes(1);
+      expect(mocks.db.raw).toHaveBeenCalledWith(
+        expect.stringContaining("FOR UPDATE"),
+        ["review-1", ORG_ID, ORG_ID],
+      );
+      expect(mocks.db.raw.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.db.findOne.mock.invocationCallOrder[0],
+      );
+      expect(mocks.db.findOne).toHaveBeenNthCalledWith(2, "review_cycles", {
+        id: "cycle-1",
+        organization_id: ORG_ID,
+      });
+      expect(mocks.db.update).not.toHaveBeenCalled();
     });
   });
 

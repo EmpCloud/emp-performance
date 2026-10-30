@@ -19,6 +19,7 @@ import { pipRoutes } from "./api/routes/pip.routes";
 import { competencyRoutes } from "./api/routes/competency.routes";
 import { reviewCycleRoutes } from "./api/routes/review-cycle.routes";
 import { reviewRoutes } from "./api/routes/review.routes";
+import { reviewOutcomeRoutes } from "./api/routes/review-outcome.routes";
 import { authRoutes } from "./api/routes/auth.routes";
 import { careerPathRoutes } from "./api/routes/career-path.routes";
 import { oneOnOneRoutes } from "./api/routes/one-on-one.routes";
@@ -114,6 +115,7 @@ v1.use("/pips", pipRoutes);
 // Feature routes
 v1.use("/review-cycles", reviewCycleRoutes);
 v1.use("/reviews", reviewRoutes);
+v1.use("/review-outcomes", reviewOutcomeRoutes);
 v1.use("/competencies", competencyRoutes);
 v1.use("/competency-frameworks", competencyRoutes); // alias
 v1.use("/career-paths", careerPathRoutes);
@@ -208,6 +210,12 @@ async function start() {
     await db.migrate();
     logger.info("Performance database migrations applied");
 
+    // Deliver transactional integration events from the database outbox. This
+    // dispatcher is intentionally independent of Redis so release durability
+    // does not depend on the optional reminder queue infrastructure.
+    const { startOutboxDispatcher } = await import("./jobs/outbox.dispatcher");
+    startOutboxDispatcher();
+
     // Initialize job queues (Redis-backed, graceful if unavailable)
     const { initJobQueues } = await import("./jobs/queue");
     await initJobQueues();
@@ -226,6 +234,12 @@ async function start() {
 // Graceful shutdown
 const shutdown = async () => {
   logger.info("Shutting down...");
+  try {
+    const { stopOutboxDispatcher } = await import("./jobs/outbox.dispatcher");
+    await stopOutboxDispatcher();
+  } catch {
+    // Dispatcher may not have been initialized
+  }
   try {
     const { closeJobQueues } = await import("./jobs/queue");
     await closeJobQueues();
