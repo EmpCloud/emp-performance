@@ -16,6 +16,11 @@ const REVIEWER_ACTOR: ActorContext = {
   roles: ["employee"],
   authenticationMethod: "jwt",
 };
+const REVIEW_ADMIN_ACTOR: ActorContext = {
+  ...REVIEWER_ACTOR,
+  role: "hr_admin",
+  roles: ["hr_admin"],
+};
 let dbAvailable = false;
 
 beforeAll(async () => {
@@ -100,9 +105,9 @@ describe.skipIf(!dbAvailable)("One-on-one service coverage", () => {
 });
 
 describe.skipIf(!dbAvailable)("Peer review service coverage", () => {
-  it("listNominations", async () => { const { listNominations } = await import("../../services/peer-review/peer-review.service"); expect(await listNominations(ORG, "non-existent")).toBeTruthy(); });
-  it("approveNomination throws for non-existent", async () => { const { approveNomination } = await import("../../services/peer-review/peer-review.service"); await expect(approveNomination(ORG, "non-existent")).rejects.toThrow(); });
-  it("declineNomination throws for non-existent", async () => { const { declineNomination } = await import("../../services/peer-review/peer-review.service"); await expect(declineNomination(ORG, "non-existent")).rejects.toThrow(); });
+  it("listNominations rejects a missing cycle", async () => { const { listNominations } = await import("../../services/peer-review/peer-review.service"); await expect(listNominations(ORG, "non-existent", REVIEW_ADMIN_ACTOR)).rejects.toThrow(); });
+  it("approveNomination throws for non-existent", async () => { const { approveNomination } = await import("../../services/peer-review/peer-review.service"); await expect(approveNomination(ORG, "non-existent", REVIEW_ADMIN_ACTOR)).rejects.toThrow(); });
+  it("declineNomination throws for non-existent", async () => { const { declineNomination } = await import("../../services/peer-review/peer-review.service"); await expect(declineNomination(ORG, "non-existent", REVIEW_ADMIN_ACTOR)).rejects.toThrow(); });
 });
 
 describe.skipIf(!dbAvailable)("PIP service coverage", () => {
@@ -113,11 +118,11 @@ describe.skipIf(!dbAvailable)("PIP service coverage", () => {
 });
 
 describe.skipIf(!dbAvailable)("Review service coverage", () => {
-  it("listReviews", async () => { const { listReviews } = await import("../../services/review/review.service"); expect(await listReviews(ORG, {})).toBeTruthy(); });
-  it("getReview throws for non-existent", async () => { const { getReview } = await import("../../services/review/review.service"); await expect(getReview(ORG, "non-existent")).rejects.toThrow(); });
+  it("listReviews", async () => { const { listReviews } = await import("../../services/review/review.service"); expect(await listReviews(ORG, {}, REVIEW_ADMIN_ACTOR)).toBeTruthy(); });
+  it("getReview throws for non-existent", async () => { const { getReview } = await import("../../services/review/review.service"); await expect(getReview(ORG, "non-existent", REVIEW_ADMIN_ACTOR)).rejects.toThrow(); });
   it("submitReview throws for non-existent", async () => { const { submitReview } = await import("../../services/review/review.service"); await expect(submitReview(ORG, "non-existent", { overall_rating: 4, summary: "Summary" }, REVIEWER_ACTOR)).rejects.toThrow(); });
   it("saveDraft throws for non-existent", async () => { const { saveDraft } = await import("../../services/review/review.service"); await expect(saveDraft(ORG, "non-existent", {} as any, REVIEWER_ACTOR)).rejects.toThrow(); });
-  it("getReviewsForParticipant", async () => { const { getReviewsForParticipant } = await import("../../services/review/review.service"); expect(await getReviewsForParticipant(ORG, USER)).toBeTruthy(); });
+  it("getReviewsForParticipant", async () => { const { getReviewsForParticipant } = await import("../../services/review/review.service"); expect(await getReviewsForParticipant(ORG, "non-existent", USER, REVIEW_ADMIN_ACTOR)).toBeTruthy(); });
 });
 
 describe.skipIf(!dbAvailable)("AI Summary service", () => {
