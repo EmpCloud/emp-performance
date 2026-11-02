@@ -16,6 +16,7 @@ const mockDB: any = {
   delete: vi.fn(),
   count: vi.fn().mockResolvedValue(0),
   raw: vi.fn().mockResolvedValue([[]]),
+  transaction: vi.fn(),
 };
 
 vi.mock("../../db/adapters", () => ({
@@ -83,6 +84,7 @@ describe("review-cycle.service", () => {
     vi.clearAllMocks();
     mockDB.findMany.mockResolvedValue({ data: [], total: 0, page: 1, limit: 20, totalPages: 0 });
     mockDB.count.mockResolvedValue(0);
+    mockDB.transaction.mockImplementation(async (callback: (trx: typeof mockDB) => unknown) => callback(mockDB));
     mockFindUserById.mockImplementation(async (id: number) => ({
       id,
       organization_id: ORG,
@@ -428,6 +430,7 @@ describe("review.service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDB.findMany.mockResolvedValue({ data: [], total: 0, page: 1, limit: 20, totalPages: 0 });
+    mockDB.transaction.mockImplementation(async (callback: (trx: typeof mockDB) => unknown) => callback(mockDB));
     mockFindUserById.mockImplementation(async (id: number) => ({
       id,
       organization_id: ORG,

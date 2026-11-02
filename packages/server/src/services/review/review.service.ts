@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import { getDB } from "../../db/adapters";
+import type { IDataContext } from "../../db/adapters/interface";
 import { findUserById } from "../../db/empcloud";
 import { NotFoundError, ValidationError, ConflictError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
@@ -59,15 +60,18 @@ const ADMIN_EDITABLE_CYCLE_STATUSES = new Set<string>([
   "in_review",
 ]);
 
-async function loadReviewWithCycle(orgId: number, reviewId: string): Promise<ReviewWithCycle> {
-  const db = getDB();
-  const review = await db.findOne<Review>("reviews", {
+async function loadReviewWithCycle(
+  orgId: number,
+  reviewId: string,
+  context: IDataContext = getDB(),
+): Promise<ReviewWithCycle> {
+  const review = await context.findOne<Review>("reviews", {
     id: reviewId,
     organization_id: orgId,
   });
   if (!review) throw new NotFoundError("Review", reviewId);
 
-  const cycle = await db.findOne<ReviewCycle>("review_cycles", {
+  const cycle = await context.findOne<ReviewCycle>("review_cycles", {
     id: review.cycle_id,
     organization_id: orgId,
   });
@@ -75,6 +79,36 @@ async function loadReviewWithCycle(orgId: number, reviewId: string): Promise<Rev
   if (!cycle) throw new NotFoundError("Review", reviewId);
 
   return { review, cycle };
+}
+
+async function lockCycle(
+  context: IDataContext,
+  orgId: number,
+  cycleId: string,
+): Promise<void> {
+  await context.raw(
+    "SELECT id FROM review_cycles WHERE id = ? AND organization_id = ? FOR UPDATE",
+    [cycleId, orgId],
+  );
+}
+
+async function loadReviewWithLockedCycle(
+  context: IDataContext,
+  orgId: number,
+  reviewId: string,
+): Promise<ReviewWithCycle> {
+  // Resolve and lock the parent cycle in one locking statement. It must be the
+  // first database read in the transaction so MySQL's repeatable-read snapshot
+  // cannot retain a cycle status observed before a concurrent transition.
+  await context.raw(
+    `SELECT rc.id
+     FROM review_cycles rc
+     INNER JOIN reviews r ON r.cycle_id = rc.id
+     WHERE r.id = ? AND r.organization_id = ? AND rc.organization_id = ?
+     FOR UPDATE`,
+    [reviewId, orgId, orgId],
+  );
+  return loadReviewWithCycle(orgId, reviewId, context);
 }
 
 function assertCycleAllowsContentChanges(cycle: ReviewCycle): void {
@@ -99,9 +133,9 @@ async function assertValidAssignment(
   employeeId: number,
   reviewerId: number,
   type: string,
+  context: IDataContext = getDB(),
 ): Promise<void> {
-  const db = getDB();
-  const participant = await db.findOne<ReviewCycleParticipant>("review_cycle_participants", {
+  const participant = await context.findOne<ReviewCycleParticipant>("review_cycle_participants", {
     cycle_id: cycle.id,
     employee_id: employeeId,
   });
@@ -124,7 +158,7 @@ async function assertValidAssignment(
   }
 
   if (type === "peer") {
-    const nomination = await db.findOne<any>("peer_review_nominations", {
+    const nomination = await context.findOne<any>("peer_review_nominations", {
       cycle_id: cycle.id,
       employee_id: employeeId,
       nominee_id: reviewerId,
@@ -142,8 +176,9 @@ async function assertValidAssignment(
 async function loadOwnedFramework(
   orgId: number,
   frameworkId: string,
+  context: IDataContext = getDB(),
 ): Promise<CompetencyFramework> {
-  const framework = await getDB().findOne<CompetencyFramework>("competency_frameworks", {
+  const framework = await context.findOne<CompetencyFramework>("competency_frameworks", {
     id: frameworkId,
     organization_id: orgId,
     is_active: true,
@@ -157,10 +192,11 @@ async function loadCycleCompetency(
   orgId: number,
   cycle: ReviewCycle,
   competencyId: string,
+  context: IDataContext = getDB(),
 ): Promise<Competency> {
   if (!cycle.framework_id) throw new NotFoundError("Competency", competencyId);
-  await loadOwnedFramework(orgId, cycle.framework_id);
-  const competency = await getDB().findOne<Competency>("competencies", {
+  await loadOwnedFramework(orgId, cycle.framework_id, context);
+  const competency = await context.findOne<Competency>("competencies", {
     id: competencyId,
     framework_id: cycle.framework_id,
     deleted_at: null,
@@ -215,57 +251,60 @@ export async function createReview(
     reviewerId: data.reviewer_id,
   });
 
-  // Verify cycle belongs to org
-  const cycle = await db.findOne<ReviewCycle>("review_cycles", {
-    id: data.cycle_id,
-    organization_id: orgId,
-  });
-  if (!cycle) throw new NotFoundError("ReviewCycle", data.cycle_id);
-  assertCycleAllowsContentChanges(cycle);
+  return db.transaction(async (trx) => {
+    await lockCycle(trx, orgId, data.cycle_id);
+    const cycle = await trx.findOne<ReviewCycle>("review_cycles", {
+      id: data.cycle_id,
+      organization_id: orgId,
+    });
+    if (!cycle) throw new NotFoundError("ReviewCycle", data.cycle_id);
+    assertCycleAllowsContentChanges(cycle);
 
-  await Promise.all([
-    assertActiveOrganizationUser(orgId, data.employee_id, "Employee"),
-    assertActiveOrganizationUser(orgId, data.reviewer_id, "Reviewer"),
-  ]);
-  await assertValidAssignment(
-    orgId,
-    cycle,
-    data.employee_id,
-    data.reviewer_id,
-    data.type,
-  );
-
-  // Reject duplicates on (cycle, employee, reviewer, type) so a participant
-  // never ends up with two identical review rows (#R10).
-  const duplicate = await db.findOne<Review>("reviews", {
-    organization_id: orgId,
-    cycle_id: data.cycle_id,
-    employee_id: data.employee_id,
-    reviewer_id: data.reviewer_id,
-    type: data.type,
-  });
-  if (duplicate) {
-    throw new ConflictError(
-      "A review of this type already exists for this reviewer and employee in this cycle",
+    await Promise.all([
+      assertActiveOrganizationUser(orgId, data.employee_id, "Employee"),
+      assertActiveOrganizationUser(orgId, data.reviewer_id, "Reviewer"),
+    ]);
+    await assertValidAssignment(
+      orgId,
+      cycle,
+      data.employee_id,
+      data.reviewer_id,
+      data.type,
+      trx,
     );
-  }
 
-  const record: Record<string, any> = {
-    id: uuidv4(),
-    organization_id: orgId,
-    cycle_id: data.cycle_id,
-    employee_id: data.employee_id,
-    reviewer_id: data.reviewer_id,
-    type: data.type,
-    status: "pending",
-    overall_rating: null,
-    summary: null,
-    strengths: null,
-    improvements: null,
-    submitted_at: null,
-  };
+    // Reject duplicates on (cycle, employee, reviewer, type) so a participant
+    // never ends up with two identical review rows (#R10).
+    const duplicate = await trx.findOne<Review>("reviews", {
+      organization_id: orgId,
+      cycle_id: data.cycle_id,
+      employee_id: data.employee_id,
+      reviewer_id: data.reviewer_id,
+      type: data.type,
+    });
+    if (duplicate) {
+      throw new ConflictError(
+        "A review of this type already exists for this reviewer and employee in this cycle",
+      );
+    }
 
-  return db.create<Review>("reviews", record as any);
+    const record: Record<string, any> = {
+      id: uuidv4(),
+      organization_id: orgId,
+      cycle_id: data.cycle_id,
+      employee_id: data.employee_id,
+      reviewer_id: data.reviewer_id,
+      type: data.type,
+      status: "pending",
+      overall_rating: null,
+      summary: null,
+      strengths: null,
+      improvements: null,
+      submitted_at: null,
+    };
+
+    return trx.create<Review>("reviews", record as any);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -479,17 +518,19 @@ export async function deleteReview(
   actor: ActorContext,
 ): Promise<void> {
   const db = getDB();
-  const { review, cycle } = await loadReviewWithCycle(orgId, id);
-  assertReviewAccess(actor, "delete", {
-    organizationId: review.organization_id,
-    employeeId: review.employee_id,
-    reviewerId: review.reviewer_id,
+  await db.transaction(async (trx) => {
+    const { review, cycle } = await loadReviewWithLockedCycle(trx, orgId, id);
+    assertReviewAccess(actor, "delete", {
+      organizationId: review.organization_id,
+      employeeId: review.employee_id,
+      reviewerId: review.reviewer_id,
+    });
+    if (review.status === "submitted") {
+      throw new ValidationError("Cannot delete a submitted review");
+    }
+    assertCycleAllowsAdministrativeChanges(cycle);
+    await trx.delete("reviews", id);
   });
-  if (review.status === "submitted") {
-    throw new ValidationError("Cannot delete a submitted review");
-  }
-  assertCycleAllowsAdministrativeChanges(cycle);
-  await db.delete("reviews", id);
 }
 
 // Reassign an unsubmitted review to a different reviewer (e.g. when the
@@ -502,46 +543,49 @@ export async function reassignReviewer(
   actor: ActorContext,
 ): Promise<Review> {
   const db = getDB();
-  const { review, cycle } = await loadReviewWithCycle(orgId, id);
-  assertReviewAccess(actor, "reassign", {
-    organizationId: review.organization_id,
-    employeeId: review.employee_id,
-    reviewerId: review.reviewer_id,
-  });
-  if (review.status === "submitted") {
-    throw new ValidationError("Cannot reassign a submitted review");
-  }
-  assertCycleAllowsAdministrativeChanges(cycle);
-  if (review.type === "self") {
-    throw new ValidationError("A self review cannot be reassigned");
-  }
-  if (review.reviewer_id === newReviewerId) {
-    return review;
-  }
+  return db.transaction(async (trx) => {
+    const { review, cycle } = await loadReviewWithLockedCycle(trx, orgId, id);
+    assertReviewAccess(actor, "reassign", {
+      organizationId: review.organization_id,
+      employeeId: review.employee_id,
+      reviewerId: review.reviewer_id,
+    });
+    if (review.status === "submitted") {
+      throw new ValidationError("Cannot reassign a submitted review");
+    }
+    assertCycleAllowsAdministrativeChanges(cycle);
+    if (review.type === "self") {
+      throw new ValidationError("A self review cannot be reassigned");
+    }
+    if (review.reviewer_id === newReviewerId) {
+      return review;
+    }
 
-  await assertActiveOrganizationUser(orgId, newReviewerId, "Reviewer");
-  await assertValidAssignment(
-    orgId,
-    cycle,
-    review.employee_id,
-    newReviewerId,
-    review.type,
-  );
-
-  const duplicate = await db.findOne<Review>("reviews", {
-    organization_id: orgId,
-    cycle_id: review.cycle_id,
-    employee_id: review.employee_id,
-    reviewer_id: newReviewerId,
-    type: review.type,
-  });
-  if (duplicate) {
-    throw new ConflictError(
-      "The target reviewer already has a review of this type for this employee in this cycle",
+    await assertActiveOrganizationUser(orgId, newReviewerId, "Reviewer");
+    await assertValidAssignment(
+      orgId,
+      cycle,
+      review.employee_id,
+      newReviewerId,
+      review.type,
+      trx,
     );
-  }
 
-  return db.update<Review>("reviews", id, { reviewer_id: newReviewerId } as any);
+    const duplicate = await trx.findOne<Review>("reviews", {
+      organization_id: orgId,
+      cycle_id: review.cycle_id,
+      employee_id: review.employee_id,
+      reviewer_id: newReviewerId,
+      type: review.type,
+    });
+    if (duplicate) {
+      throw new ConflictError(
+        "The target reviewer already has a review of this type for this employee in this cycle",
+      );
+    }
+
+    return trx.update<Review>("reviews", id, { reviewer_id: newReviewerId } as any);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -560,24 +604,26 @@ export async function saveDraft(
   actor: ActorContext,
 ): Promise<Review> {
   const db = getDB();
-  const { review, cycle } = await loadReviewWithCycle(orgId, id);
-  assertReviewAccess(actor, "save_draft", {
-    organizationId: review.organization_id,
-    employeeId: review.employee_id,
-    reviewerId: review.reviewer_id,
+  return db.transaction(async (trx) => {
+    const { review, cycle } = await loadReviewWithLockedCycle(trx, orgId, id);
+    assertReviewAccess(actor, "save_draft", {
+      organizationId: review.organization_id,
+      employeeId: review.employee_id,
+      reviewerId: review.reviewer_id,
+    });
+    if (review.status === "submitted") {
+      throw new ValidationError("Cannot edit a submitted review");
+    }
+    assertCycleAllowsContentChanges(cycle);
+
+    const updates: Record<string, any> = { status: "draft" };
+    if (data.overall_rating !== undefined) updates.overall_rating = data.overall_rating;
+    if (data.summary !== undefined) updates.summary = data.summary;
+    if (data.strengths !== undefined) updates.strengths = data.strengths;
+    if (data.improvements !== undefined) updates.improvements = data.improvements;
+
+    return trx.update<Review>("reviews", id, updates as any);
   });
-  if (review.status === "submitted") {
-    throw new ValidationError("Cannot edit a submitted review");
-  }
-  assertCycleAllowsContentChanges(cycle);
-
-  const updates: Record<string, any> = { status: "draft" };
-  if (data.overall_rating !== undefined) updates.overall_rating = data.overall_rating;
-  if (data.summary !== undefined) updates.summary = data.summary;
-  if (data.strengths !== undefined) updates.strengths = data.strengths;
-  if (data.improvements !== undefined) updates.improvements = data.improvements;
-
-  return db.update<Review>("reviews", id, updates as any);
 }
 
 // ---------------------------------------------------------------------------
@@ -596,64 +642,74 @@ export async function submitReview(
   actor: ActorContext,
 ): Promise<Review> {
   const db = getDB();
-  const { review, cycle } = await loadReviewWithCycle(orgId, id);
-  assertReviewAccess(actor, "submit", {
-    organizationId: review.organization_id,
-    employeeId: review.employee_id,
-    reviewerId: review.reviewer_id,
-  });
-  if (review.status === "submitted") {
-    throw new ValidationError("Review has already been submitted");
-  }
-  assertCycleAllowsContentChanges(cycle);
-
-  // Verify all competencies are rated if cycle has a framework
-  if (cycle.framework_id) {
-    await loadOwnedFramework(orgId, cycle.framework_id);
-    const competencies = await db.findMany<Competency>("competencies", {
-      filters: { framework_id: cycle.framework_id, deleted_at: null },
-      page: 1,
-      limit: 1000,
-    });
-    const existingRatings = await db.findMany<ReviewCompetencyRating>("review_competency_ratings", {
-      filters: { review_id: id },
-      page: 1,
-      limit: 1000,
-    });
-    const expectedIds = new Set(competencies.data.map((competency) => competency.id));
-    const rogueRatings = existingRatings.data.filter(
-      (rating) => !expectedIds.has(rating.competency_id),
-    );
-    if (rogueRatings.length > 0) {
-      throw new ValidationError("Review contains ratings outside the cycle competency framework");
-    }
-    const ratedIds = new Set(existingRatings.data.map((r) => r.competency_id));
-    const unrated = competencies.data.filter((c) => !ratedIds.has(c.id));
-    if (unrated.length > 0) {
-      throw new ValidationError(
-        `All competencies must be rated before submitting. Missing: ${unrated.map((c) => c.name).join(", ")}`,
-      );
-    }
-  } else {
-    const existingRatings = await db.findMany<ReviewCompetencyRating>("review_competency_ratings", {
-      filters: { review_id: id },
-      page: 1,
-      limit: 1,
-    });
-    if (existingRatings.data.length > 0) {
-      throw new ValidationError("This review cycle has no competency framework");
-    }
-  }
-
   try {
-    return await db.update<Review>("reviews", id, {
-      overall_rating: data.overall_rating,
-      summary: data.summary,
-      strengths: data.strengths ?? null,
-      improvements: data.improvements ?? null,
-      status: "submitted",
-      submitted_at: new Date(),
-    } as any);
+    return await db.transaction(async (trx) => {
+      const { review, cycle } = await loadReviewWithLockedCycle(trx, orgId, id);
+      assertReviewAccess(actor, "submit", {
+        organizationId: review.organization_id,
+        employeeId: review.employee_id,
+        reviewerId: review.reviewer_id,
+      });
+      if (review.status === "submitted") {
+        throw new ValidationError("Review has already been submitted");
+      }
+      assertCycleAllowsContentChanges(cycle);
+
+      // Verify all competencies are rated if cycle has a framework.
+      if (cycle.framework_id) {
+        await loadOwnedFramework(orgId, cycle.framework_id, trx);
+        const competencies = await trx.findMany<Competency>("competencies", {
+          filters: { framework_id: cycle.framework_id, deleted_at: null },
+          page: 1,
+          limit: 1000,
+        });
+        const existingRatings = await trx.findMany<ReviewCompetencyRating>(
+          "review_competency_ratings",
+          {
+            filters: { review_id: id },
+            page: 1,
+            limit: 1000,
+          },
+        );
+        const expectedIds = new Set(competencies.data.map((competency) => competency.id));
+        const rogueRatings = existingRatings.data.filter(
+          (rating) => !expectedIds.has(rating.competency_id),
+        );
+        if (rogueRatings.length > 0) {
+          throw new ValidationError(
+            "Review contains ratings outside the cycle competency framework",
+          );
+        }
+        const ratedIds = new Set(existingRatings.data.map((rating) => rating.competency_id));
+        const unrated = competencies.data.filter((competency) => !ratedIds.has(competency.id));
+        if (unrated.length > 0) {
+          throw new ValidationError(
+            `All competencies must be rated before submitting. Missing: ${unrated.map((competency) => competency.name).join(", ")}`,
+          );
+        }
+      } else {
+        const existingRatings = await trx.findMany<ReviewCompetencyRating>(
+          "review_competency_ratings",
+          {
+            filters: { review_id: id },
+            page: 1,
+            limit: 1,
+          },
+        );
+        if (existingRatings.data.length > 0) {
+          throw new ValidationError("This review cycle has no competency framework");
+        }
+      }
+
+      return trx.update<Review>("reviews", id, {
+        overall_rating: data.overall_rating,
+        summary: data.summary,
+        strengths: data.strengths ?? null,
+        improvements: data.improvements ?? null,
+        status: "submitted",
+        submitted_at: new Date(),
+      } as any);
+    });
   } catch (err) {
     logger.error("Failed to submit review", { reviewId: id, error: (err as Error).message, stack: (err as Error).stack });
     throw err;
@@ -673,45 +729,47 @@ export async function rateCompetency(
   actor: ActorContext,
 ): Promise<ReviewCompetencyRating> {
   const db = getDB();
-  const { review, cycle } = await loadReviewWithCycle(orgId, reviewId);
-  assertReviewAccess(actor, "rate_competency", {
-    organizationId: review.organization_id,
-    employeeId: review.employee_id,
-    reviewerId: review.reviewer_id,
-  });
-  if (review.status === "submitted") {
-    throw new ValidationError("Cannot rate competencies on a submitted review");
-  }
-  assertCycleAllowsContentChanges(cycle);
-  await loadCycleCompetency(orgId, cycle, competencyId);
+  return db.transaction(async (trx) => {
+    const { review, cycle } = await loadReviewWithLockedCycle(trx, orgId, reviewId);
+    assertReviewAccess(actor, "rate_competency", {
+      organizationId: review.organization_id,
+      employeeId: review.employee_id,
+      reviewerId: review.reviewer_id,
+    });
+    if (review.status === "submitted") {
+      throw new ValidationError("Cannot rate competencies on a submitted review");
+    }
+    assertCycleAllowsContentChanges(cycle);
+    await loadCycleCompetency(orgId, cycle, competencyId, trx);
 
-  // Upsert: check if rating exists already
-  const existing = await db.findOne<ReviewCompetencyRating>("review_competency_ratings", {
-    review_id: reviewId,
-    competency_id: competencyId,
-  });
+    // Upsert: check if rating exists already.
+    const existing = await trx.findOne<ReviewCompetencyRating>("review_competency_ratings", {
+      review_id: reviewId,
+      competency_id: competencyId,
+    });
 
-  if (existing) {
-    return db.update<ReviewCompetencyRating>("review_competency_ratings", existing.id, {
+    if (existing) {
+      return trx.update<ReviewCompetencyRating>("review_competency_ratings", existing.id, {
+        rating,
+        comments: comments ?? null,
+      } as any);
+    }
+
+    const record: Record<string, any> = {
+      id: uuidv4(),
+      review_id: reviewId,
+      competency_id: competencyId,
       rating,
       comments: comments ?? null,
-    } as any);
-  }
+    };
 
-  const record: Record<string, any> = {
-    id: uuidv4(),
-    review_id: reviewId,
-    competency_id: competencyId,
-    rating,
-    comments: comments ?? null,
-  };
+    // Update review status to draft if pending.
+    if (review.status === "pending") {
+      await trx.update("reviews", reviewId, { status: "draft" } as any);
+    }
 
-  // Update review status to draft if pending
-  if (review.status === "pending") {
-    await db.update("reviews", reviewId, { status: "draft" } as any);
-  }
-
-  return db.create<ReviewCompetencyRating>("review_competency_ratings", record as any);
+    return trx.create<ReviewCompetencyRating>("review_competency_ratings", record as any);
+  });
 }
 
 // ---------------------------------------------------------------------------

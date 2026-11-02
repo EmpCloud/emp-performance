@@ -5,10 +5,14 @@ import { ValidationError } from "../../utils/errors";
 import {
   createReviewCycleSchema,
   addParticipantsSchema,
+  calibrationDecisionSchema,
+  calibrationParticipantParamSchema,
   idParamSchema,
   paginationSchema,
+  transitionReviewCycleSchema,
 } from "@emp-performance/shared";
 import * as cycleService from "../../services/review/review-cycle.service";
+import * as calibrationService from "../../services/review/calibration.service";
 
 const router = Router();
 
@@ -130,7 +134,7 @@ router.post(
     try {
       const { id } = idParamSchema.parse(req.params);
       const orgId = req.user!.empcloudOrgId;
-      const cycle = await cycleService.closeCycle(orgId, id);
+      const cycle = await cycleService.closeCycle(orgId, id, req.user!.empcloudUserId);
       return sendSuccess(res, cycle);
     } catch (err) {
       next(err);
@@ -162,12 +166,105 @@ router.post(
     try {
       const { id } = idParamSchema.parse(req.params);
       const orgId = req.user!.empcloudOrgId;
-      const target = req.body?.status;
-      if (target !== "in_review" && target !== "calibration") {
-        throw new ValidationError("status must be one of: in_review, calibration");
-      }
-      const cycle = await cycleService.transitionCycle(orgId, id, target);
+      const { status: target } = transitionReviewCycleSchema.parse(req.body);
+      const cycle = await cycleService.transitionCycle(
+        orgId,
+        id,
+        target,
+        req.user!.empcloudUserId,
+      );
       return sendSuccess(res, cycle);
+    } catch (err: any) {
+      if (err.name === "ZodError") {
+        return next(
+          new ValidationError(
+            "Invalid review-cycle transition",
+            err.flatten().fieldErrors,
+          ),
+        );
+      }
+      next(err);
+    }
+  },
+);
+
+// GET /:id/calibration — admin-only calibration roster with baseline and latest decision.
+router.get(
+  "/:id/calibration",
+  authorize("super_admin", "org_admin", "hr_admin", "hr_manager"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = idParamSchema.parse(req.params);
+      const roster = await calibrationService.getCalibrationRoster(
+        req.user!.empcloudOrgId,
+        id,
+      );
+      return sendSuccess(res, roster);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// PUT /:id/calibration/:participantId — append a versioned rating adjustment.
+router.put(
+  "/:id/calibration/:participantId",
+  authorize("super_admin", "org_admin", "hr_admin", "hr_manager"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id, participantId } = calibrationParticipantParamSchema.parse(req.params);
+      const input = calibrationDecisionSchema.parse(req.body);
+      const decision = await calibrationService.recordCalibrationDecision(
+        req.user!.empcloudOrgId,
+        id,
+        participantId,
+        req.user!.empcloudUserId,
+        input,
+      );
+      return sendSuccess(res, decision, 201);
+    } catch (err: any) {
+      if (err.name === "ZodError") {
+        return next(
+          new ValidationError("Invalid calibration decision", err.flatten().fieldErrors),
+        );
+      }
+      next(err);
+    }
+  },
+);
+
+// GET /:id/calibration/:participantId/history — immutable decision history.
+router.get(
+  "/:id/calibration/:participantId/history",
+  authorize("super_admin", "org_admin", "hr_admin", "hr_manager"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id, participantId } = calibrationParticipantParamSchema.parse(req.params);
+      const history = await calibrationService.getCalibrationHistory(
+        req.user!.empcloudOrgId,
+        id,
+        participantId,
+      );
+      return sendSuccess(res, history);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// POST /:id/calibration/finalize — freeze the calibration set before release.
+router.post(
+  "/:id/calibration/finalize",
+  authorize("super_admin", "org_admin", "hr_admin"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = idParamSchema.parse(req.params);
+      const roster = await calibrationService.finalizeCalibration(
+        req.user!.empcloudOrgId,
+        id,
+        req.user!.empcloudUserId,
+      );
+      return sendSuccess(res, roster);
     } catch (err) {
       next(err);
     }
@@ -175,22 +272,26 @@ router.post(
 );
 
 // GET /:id/participants — list participants (paginated + searchable)
-router.get("/:id/participants", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { id } = idParamSchema.parse(req.params);
-    const query = paginationSchema.parse(req.query);
-    const orgId = req.user!.empcloudOrgId;
-    const result = await cycleService.listParticipants(orgId, id, {
-      page: query.page,
-      perPage: query.perPage,
-      status: req.query.status as string | undefined,
-      search: query.search,
-    });
-    return sendPaginated(res, result.data, result.total, result.page, result.perPage);
-  } catch (err) {
-    next(err);
-  }
-});
+router.get(
+  "/:id/participants",
+  authorize("super_admin", "org_admin", "hr_admin", "hr_manager"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = idParamSchema.parse(req.params);
+      const query = paginationSchema.parse(req.query);
+      const orgId = req.user!.empcloudOrgId;
+      const result = await cycleService.listParticipants(orgId, id, {
+        page: query.page,
+        perPage: query.perPage,
+        status: req.query.status as string | undefined,
+        search: query.search,
+      });
+      return sendPaginated(res, result.data, result.total, result.page, result.perPage);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 // POST /:id/participants — add participants (bulk)
 router.post(
@@ -230,15 +331,19 @@ router.delete(
 );
 
 // GET /:id/ratings-distribution — bell curve data
-router.get("/:id/ratings-distribution", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { id } = idParamSchema.parse(req.params);
-    const orgId = req.user!.empcloudOrgId;
-    const distribution = await cycleService.getRatingsDistribution(orgId, id);
-    return sendSuccess(res, distribution);
-  } catch (err) {
-    next(err);
-  }
-});
+router.get(
+  "/:id/ratings-distribution",
+  authorize("super_admin", "org_admin", "hr_admin", "hr_manager"),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = idParamSchema.parse(req.params);
+      const orgId = req.user!.empcloudOrgId;
+      const distribution = await cycleService.getRatingsDistribution(orgId, id);
+      return sendSuccess(res, distribution);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 export { router as reviewCycleRoutes };

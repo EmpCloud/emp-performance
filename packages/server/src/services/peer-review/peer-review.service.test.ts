@@ -10,6 +10,7 @@ const mockDB = {
   update: vi.fn(),
   deleteMany: vi.fn(),
   raw: vi.fn(),
+  transaction: vi.fn(),
 };
 
 vi.mock("../../db/adapters", () => ({
@@ -27,6 +28,7 @@ vi.mock("../../utils/logger", () => ({
 
 import {
   approveNomination,
+  declineNomination,
   getResponse,
   listNominations,
   listResponses,
@@ -117,6 +119,9 @@ describe("peer-review.service integrity and privacy", () => {
     mockDB.raw.mockResolvedValue([[]]);
     mockDB.createMany.mockResolvedValue([]);
     mockDB.deleteMany.mockResolvedValue(0);
+    mockDB.transaction.mockImplementation(async (fn: (trx: typeof mockDB) => Promise<unknown>) =>
+      fn(mockDB),
+    );
   });
 
   it("limits a non-admin nomination to the actor as subject", async () => {
@@ -135,6 +140,10 @@ describe("peer-review.service integrity and privacy", () => {
       nominate(ORG_ID, "cycle-1", EMPLOYEE_ID, REVIEWER_ID, actor(EMPLOYEE_ID)),
     ).rejects.toThrow("completed");
     expect(mockDB.create).not.toHaveBeenCalled();
+    expect(mockDB.raw).toHaveBeenCalledWith(
+      expect.stringContaining("FOR UPDATE"),
+      ["cycle-1", ORG_ID],
+    );
   });
 
   it("creates a self-subject nomination without trusting nominated_by input", async () => {
@@ -238,6 +247,36 @@ describe("peer-review.service integrity and privacy", () => {
         status: "pending",
       }),
     );
+    expect(mockDB.transaction).toHaveBeenCalledOnce();
+    expect(mockDB.raw).toHaveBeenCalledWith(
+      expect.stringContaining("FOR UPDATE"),
+      ["cycle-1", ORG_ID],
+    );
+  });
+
+  it("re-checks the locked cycle before approving or declining a nomination", async () => {
+    const pending = nomination({ status: "pending", approved_by: null });
+    mockDB.findById.mockResolvedValue(pending);
+    mockDB.findOne.mockImplementation(async (table: string) => {
+      if (table === "review_cycles") return cycle({ status: "calibration" });
+      return null;
+    });
+
+    await expect(
+      approveNomination(ORG_ID, pending.id, actor(1, "hr_admin")),
+    ).rejects.toThrow("calibration");
+    await expect(
+      declineNomination(ORG_ID, pending.id, actor(1, "hr_admin")),
+    ).rejects.toThrow("calibration");
+
+    expect(mockDB.raw).toHaveBeenCalledTimes(2);
+    expect(mockDB.raw).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("FOR UPDATE"),
+      ["cycle-1", ORG_ID],
+    );
+    expect(mockDB.update).not.toHaveBeenCalled();
+    expect(mockDB.create).not.toHaveBeenCalled();
   });
 
   it("conceals raw response detail from the reviewee", async () => {
@@ -346,6 +385,11 @@ describe("peer-review.service integrity and privacy", () => {
       }),
     ).rejects.toThrow("calibration");
     expect(mockDB.create).not.toHaveBeenCalled();
+    expect(mockDB.transaction).toHaveBeenCalledOnce();
+    expect(mockDB.raw).toHaveBeenCalledWith(
+      expect.stringContaining("FOR UPDATE"),
+      ["cycle-1", ORG_ID],
+    );
   });
 
   it("synchronizes a valid submitted response into canonical reviews and ratings", async () => {
@@ -397,5 +441,6 @@ describe("peer-review.service integrity and privacy", () => {
         summary: "Strong collaboration",
       }),
     );
+    expect(mockDB.transaction).toHaveBeenCalledOnce();
   });
 });

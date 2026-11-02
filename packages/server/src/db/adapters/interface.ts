@@ -27,15 +27,44 @@ export interface QueryResult<T> {
   totalPages: number;
 }
 
-export interface TransactionContext {
+/**
+ * Data operations that can run either on the root connection or on a
+ * transaction-bound connection. Keeping this contract separate from
+ * connection lifecycle/migration concerns lets services pass a transaction
+ * context to repositories without accidentally escaping the transaction.
+ */
+export interface IDataContext {
+  findById<T>(table: string, id: string): Promise<T | null>;
+  findOne<T>(table: string, where: Record<string, any>): Promise<T | null>;
+  findMany<T>(table: string, options?: QueryOptions): Promise<QueryResult<T>>;
+  create<T>(table: string, data: Partial<T>): Promise<T>;
+  createMany<T>(table: string, data: Partial<T>[]): Promise<T[]>;
+  update<T>(table: string, id: string, data: Partial<T>): Promise<T>;
+  updateMany(table: string, where: Record<string, any>, data: Record<string, any>): Promise<number>;
+  delete(table: string, id: string): Promise<boolean>;
+  deleteMany(table: string, where: Record<string, any>): Promise<number>;
+  count(table: string, where?: Record<string, any>): Promise<number>;
+  sum(table: string, field: string, where?: Record<string, any>): Promise<number>;
+  raw<T>(query: string, params?: any[]): Promise<T>;
+}
+
+export interface TransactionContext extends IDataContext {
+  /**
+   * Kept for backwards compatibility. Transaction callbacks normally commit
+   * automatically when they return successfully.
+   */
   commit(): Promise<void>;
+  /**
+   * Kept for backwards compatibility. Throwing from the callback is the
+   * preferred way to trigger a rollback.
+   */
   rollback(): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
 // Core DB Adapter Interface
 // ---------------------------------------------------------------------------
-export interface IDBAdapter {
+export interface IDBAdapter extends IDataContext {
   // Connection lifecycle
   connect(): Promise<void>;
   disconnect(): Promise<void>;
@@ -46,26 +75,8 @@ export interface IDBAdapter {
   rollback(): Promise<void>;
   seed(seedName?: string): Promise<void>;
 
-  // CRUD
-  findById<T>(table: string, id: string): Promise<T | null>;
-  findOne<T>(table: string, where: Record<string, any>): Promise<T | null>;
-  findMany<T>(table: string, options?: QueryOptions): Promise<QueryResult<T>>;
-  create<T>(table: string, data: Partial<T>): Promise<T>;
-  createMany<T>(table: string, data: Partial<T>[]): Promise<T[]>;
-  update<T>(table: string, id: string, data: Partial<T>): Promise<T>;
-  updateMany(table: string, where: Record<string, any>, data: Record<string, any>): Promise<number>;
-  delete(table: string, id: string): Promise<boolean>;
-  deleteMany(table: string, where: Record<string, any>): Promise<number>;
-
-  // Aggregations
-  count(table: string, where?: Record<string, any>): Promise<number>;
-  sum(table: string, field: string, where?: Record<string, any>): Promise<number>;
-
   // Transactions
   transaction<T>(fn: (trx: TransactionContext) => Promise<T>): Promise<T>;
-
-  // Raw query escape hatch (use sparingly)
-  raw<T>(query: string, params?: any[]): Promise<T>;
 }
 
 // ---------------------------------------------------------------------------
@@ -73,7 +84,7 @@ export interface IDBAdapter {
 // ---------------------------------------------------------------------------
 export abstract class BaseRepository<T> {
   constructor(
-    protected adapter: IDBAdapter,
+    protected adapter: IDataContext,
     protected tableName: string
   ) {}
 

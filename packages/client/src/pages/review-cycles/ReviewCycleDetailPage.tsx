@@ -14,10 +14,15 @@ import {
   Search,
   X,
   Save,
+  ArrowRight,
+  Scale,
+  ShieldCheck,
+  Flag,
 } from "lucide-react";
 import { apiGet, apiPost, apiPut, apiDelete } from "@/api/client";
 import { useConfirm } from "@/components/ConfirmDialog";
 import type {
+  CanonicalRole,
   ReviewCycle,
   ReviewCycleParticipant,
   RatingDistribution,
@@ -26,6 +31,9 @@ import type {
 import { formatDate } from "@/lib/utils";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Pagination } from "@/components/Pagination";
+import { CalibrationPanel, useCalibrationSnapshot } from "./CalibrationPanel";
+import { ReviewOutcomeAppealsPanel } from "./ReviewOutcomeAppealsPanel";
+import { useAuthStore } from "@/lib/auth-store";
 
 const STATUS_BADGE: Record<string, string> = {
   draft: "bg-gray-100 text-gray-700",
@@ -39,6 +47,8 @@ const STATUS_BADGE: Record<string, string> = {
 type CycleDetail = ReviewCycle & {
   participant_count: number;
   stats: { pending: number; submitted: number; draft: number };
+  calibration_finalized_at?: string | null;
+  calibration_finalized_by?: number | null;
 };
 
 type ParticipantWithNames = ReviewCycleParticipant & {
@@ -54,8 +64,13 @@ type OrgUser = {
   designation: string | null;
 };
 
-const TABS = ["participants", "ratings", "settings"] as const;
+const TABS = ["participants", "calibration", "ratings", "appeals", "settings"] as const;
 type Tab = (typeof TABS)[number];
+const APPEAL_GOVERNANCE_ROLES: ReadonlySet<CanonicalRole> = new Set([
+  "super_admin",
+  "org_admin",
+  "hr_admin",
+]);
 
 export function ReviewCycleDetailPage() {
   const { t } = useTranslation();
@@ -65,6 +80,8 @@ export function ReviewCycleDetailPage() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<Tab>("participants");
+  const userRole = useAuthStore((state) => state.user?.role);
+  const canGovernAppeals = userRole ? APPEAL_GOVERNANCE_ROLES.has(userRole) : false;
 
   const editMode = searchParams.get("edit") === "1";
 
@@ -82,6 +99,11 @@ export function ReviewCycleDetailPage() {
     queryFn: () => apiGet<CycleDetail>(`/review-cycles/${id}`),
     enabled: Boolean(id),
   });
+
+  const calibrationQuery = useCalibrationSnapshot(
+    id,
+    cycleData?.data?.status === "calibration" || cycleData?.data?.status === "completed",
+  );
 
   const { data: participantsData } = useQuery({
     queryKey: ["review-cycle-participants", id, participantPage, participantSearch],
@@ -108,6 +130,16 @@ export function ReviewCycleDetailPage() {
   });
 
   const cycle = cycleData?.data;
+  const visibleTabs = useMemo<Tab[]>(
+    () =>
+      cycle?.status === "completed" && canGovernAppeals
+        ? [...TABS]
+        : TABS.filter((tab) => tab !== "appeals"),
+    [canGovernAppeals, cycle?.status],
+  );
+  useEffect(() => {
+    if (!visibleTabs.includes(activeTab)) setActiveTab("participants");
+  }, [activeTab, visibleTabs]);
   const participants = participantsData?.data?.data ?? [];
   const participantTotalPages = participantsData?.data?.totalPages ?? 1;
   const distribution = distributionData?.data ?? [];
@@ -115,20 +147,42 @@ export function ReviewCycleDetailPage() {
 
   const launchMutation = useMutation({
     mutationFn: () => apiPost(`/review-cycles/${id}/launch`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["review-cycle", id] }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["review-cycle", id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycles"] });
+    },
+  });
+
+  const transitionMutation = useMutation({
+    mutationFn: (status: "in_review" | "calibration") =>
+      apiPost(`/review-cycles/${id}/transition`, { status }),
+    onSuccess: async (_data, status) => {
+      await queryClient.invalidateQueries({ queryKey: ["review-cycle", id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycles"] });
+      if (status === "calibration") {
+        setActiveTab("calibration");
+        await queryClient.invalidateQueries({ queryKey: ["review-cycle-calibration", id] });
+      }
+    },
   });
 
   const closeMutation = useMutation({
     mutationFn: () => apiPost(`/review-cycles/${id}/close`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["review-cycle", id] }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["review-cycle", id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycles"] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycle-calibration", id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycle-distribution", id] });
+    },
   });
 
   const addParticipantMutation = useMutation({
     mutationFn: (data: { participants: { employee_id: number; manager_id?: number }[] }) =>
       apiPost(`/review-cycles/${id}/participants`, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["review-cycle-participants", id] });
-      queryClient.invalidateQueries({ queryKey: ["review-cycle", id] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["review-cycle-participants", id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycle", id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycles"] });
       setSelected([]);
       setManagerId("");
       setPickerQuery("");
@@ -138,9 +192,10 @@ export function ReviewCycleDetailPage() {
   const removeParticipantMutation = useMutation({
     mutationFn: (participantId: string) =>
       apiDelete(`/review-cycles/${id}/participants/${participantId}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["review-cycle-participants", id] });
-      queryClient.invalidateQueries({ queryKey: ["review-cycle", id] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["review-cycle-participants", id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycle", id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycles"] });
     },
   });
 
@@ -160,6 +215,8 @@ export function ReviewCycleDetailPage() {
     );
   }
 
+  const calibrationFinalizedAt =
+    calibrationQuery.data?.finalizedAt ?? cycle.calibration_finalized_at ?? null;
   const maxCount = Math.max(...distribution.map((d) => d.count), 1);
 
   function toggleSelect(user: OrgUser) {
@@ -185,15 +242,66 @@ export function ReviewCycleDetailPage() {
     setSearchParams(next, { replace: true });
   }
 
+  function handleTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    let nextIndex = index;
+    if (event.key === "ArrowLeft") {
+      nextIndex = index === 0 ? visibleTabs.length - 1 : index - 1;
+    } else if (event.key === "ArrowRight") {
+      nextIndex = index === visibleTabs.length - 1 ? 0 : index + 1;
+    }
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = visibleTabs.length - 1;
+    else return;
+
+    event.preventDefault();
+    const nextTab = visibleTabs[nextIndex];
+    setActiveTab(nextTab);
+    document.getElementById(`review-cycle-tab-${nextTab}`)?.focus();
+  }
+
+  async function handleRelease() {
+    const approved = await confirm({
+      title: t("reviewCycleDetail.releaseTitle"),
+      message: t("reviewCycleDetail.releaseMessage"),
+      confirmLabel: t("reviewCycleDetail.releaseResults"),
+      variant: "default",
+    });
+    if (approved) closeMutation.mutate();
+  }
+
+  async function handleTransition(status: "in_review" | "calibration") {
+    const approved = await confirm({
+      title: t(
+        status === "calibration"
+          ? "reviewCycleDetail.startCalibrationTitle"
+          : "reviewCycleDetail.beginReviewTitle",
+      ),
+      message: t(
+        status === "calibration"
+          ? "reviewCycleDetail.startCalibrationMessage"
+          : "reviewCycleDetail.beginReviewMessage",
+      ),
+      confirmLabel: t(
+        status === "calibration"
+          ? "reviewCycleDetail.startCalibration"
+          : "reviewCycleDetail.beginReview",
+      ),
+      variant: "default",
+    });
+    if (approved) transitionMutation.mutate(status);
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-start gap-4">
         <button
+          type="button"
+          aria-label={t("reviewCycleDetail.backToCycles")}
           onClick={() => navigate("/review-cycles")}
-          className="mt-1 rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+          className="mt-1 rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
         >
-          <ArrowLeft className="h-5 w-5" />
+          <ArrowLeft className="h-5 w-5" aria-hidden="true" />
         </button>
         <div className="flex-1">
           <div className="flex items-center gap-3">
@@ -212,26 +320,64 @@ export function ReviewCycleDetailPage() {
         <div className="flex gap-2">
           {cycle.status === "draft" && (
             <button
+              type="button"
               onClick={() => launchMutation.mutate()}
               disabled={launchMutation.isPending}
-              className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500 focus-visible:ring-offset-2"
             >
-              <Play className="h-4 w-4" />
+              <Play className="h-4 w-4" aria-hidden="true" />
               {launchMutation.isPending
                 ? t("reviewCycleDetail.launching")
                 : t("reviewCycleDetail.launch")}
             </button>
           )}
-          {(cycle.status === "active" || cycle.status === "in_review" || cycle.status === "calibration") && (
+          {cycle.status === "active" && (
             <button
-              onClick={() => closeMutation.mutate()}
-              disabled={closeMutation.isPending}
-              className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+              type="button"
+              onClick={() => void handleTransition("in_review")}
+              disabled={transitionMutation.isPending}
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
             >
-              <CheckCircle className="h-4 w-4" />
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              {transitionMutation.isPending
+                ? t("reviewCycleDetail.transitioning")
+                : t("reviewCycleDetail.beginReview")}
+            </button>
+          )}
+          {cycle.status === "in_review" && (
+            <button
+              type="button"
+              onClick={() => void handleTransition("calibration")}
+              disabled={transitionMutation.isPending}
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:ring-offset-2"
+            >
+              <Scale className="h-4 w-4" aria-hidden="true" />
+              {transitionMutation.isPending
+                ? t("reviewCycleDetail.transitioning")
+                : t("reviewCycleDetail.startCalibration")}
+            </button>
+          )}
+          {cycle.status === "calibration" && !calibrationFinalizedAt && (
+            <button
+              type="button"
+              onClick={() => setActiveTab("calibration")}
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-purple-300 bg-white px-4 py-2 text-sm font-medium text-purple-700 hover:bg-purple-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:ring-offset-2"
+            >
+              <Scale className="h-4 w-4" aria-hidden="true" />
+              {t("reviewCycleDetail.reviewCalibration")}
+            </button>
+          )}
+          {cycle.status === "calibration" && calibrationFinalizedAt && (
+            <button
+              type="button"
+              onClick={handleRelease}
+              disabled={closeMutation.isPending}
+              className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
+            >
+              <ShieldCheck className="h-4 w-4" aria-hidden="true" />
               {closeMutation.isPending
-                ? t("reviewCycleDetail.closing")
-                : t("reviewCycleDetail.closeCycle")}
+                ? t("reviewCycleDetail.releasing")
+                : t("reviewCycleDetail.releaseResults")}
             </button>
           )}
         </div>
@@ -239,13 +385,19 @@ export function ReviewCycleDetailPage() {
 
       {/* Error banners */}
       {launchMutation.isError && (
-        <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
+        <div role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
           {(launchMutation.error as any)?.response?.data?.error?.message ??
             t("reviewCycleDetail.failedToLaunch")}
         </div>
       )}
+      {transitionMutation.isError && (
+        <div role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
+          {(transitionMutation.error as any)?.response?.data?.error?.message ??
+            t("reviewCycleDetail.failedToTransition")}
+        </div>
+      )}
       {closeMutation.isError && (
-        <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
+        <div role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
           {(closeMutation.error as any)?.response?.data?.error?.message ??
             t("reviewCycleDetail.failedToClose")}
         </div>
@@ -276,35 +428,54 @@ export function ReviewCycleDetailPage() {
 
       {/* Tabs */}
       <div className="border-b border-gray-200">
-        <nav className="flex gap-6">
-          {TABS.map((tab) => (
+        <div role="tablist" aria-label={t("reviewCycleDetail.tabsLabel")} className="flex gap-6 overflow-x-auto">
+          {visibleTabs.map((tab, index) => (
             <button
               key={tab}
+              id={`review-cycle-tab-${tab}`}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab}
+              aria-controls={`review-cycle-panel-${tab}`}
+              tabIndex={activeTab === tab ? 0 : -1}
               onClick={() => setActiveTab(tab)}
-              className={`border-b-2 pb-3 text-sm font-medium transition-colors ${
+              onKeyDown={(event) => handleTabKeyDown(event, index)}
+              className={`whitespace-nowrap border-b-2 pb-3 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 ${
                 activeTab === tab
                   ? "border-brand-600 text-brand-600"
                   : "border-transparent text-gray-500 hover:text-gray-700"
               }`}
             >
               <span className="inline-flex items-center gap-1.5">
-                {tab === "participants" && <Users className="h-4 w-4" />}
-                {tab === "ratings" && <BarChart3 className="h-4 w-4" />}
-                {tab === "settings" && <Settings className="h-4 w-4" />}
+                {tab === "participants" && <Users className="h-4 w-4" aria-hidden="true" />}
+                {tab === "calibration" && <Scale className="h-4 w-4" aria-hidden="true" />}
+                {tab === "ratings" && <BarChart3 className="h-4 w-4" aria-hidden="true" />}
+                {tab === "appeals" && <Flag className="h-4 w-4" aria-hidden="true" />}
+                {tab === "settings" && <Settings className="h-4 w-4" aria-hidden="true" />}
                 {tab === "participants"
                   ? t("reviewCycleDetail.tabParticipants")
+                  : tab === "calibration"
+                    ? t("reviewCycleDetail.tabCalibration")
                   : tab === "ratings"
                     ? t("reviewCycleDetail.tabRatings")
+                  : tab === "appeals"
+                    ? t("reviewCycleDetail.tabAppeals")
                     : t("reviewCycleDetail.tabSettings")}
               </span>
             </button>
           ))}
-        </nav>
+        </div>
       </div>
 
       {/* Tab content */}
       {activeTab === "participants" && (
-        <div className="space-y-4">
+        <div
+          id="review-cycle-panel-participants"
+          role="tabpanel"
+          aria-labelledby="review-cycle-tab-participants"
+          tabIndex={0}
+          className="space-y-4 focus:outline-none"
+        >
           {/* Add participant — searchable employee picker + bulk add */}
           {(cycle.status === "draft" || cycle.status === "active") && (
             <form onSubmit={handleBulkAdd} className="rounded-lg border border-gray-200 bg-white p-4 space-y-3">
@@ -508,8 +679,32 @@ export function ReviewCycleDetailPage() {
         </div>
       )}
 
+      {activeTab === "calibration" && (
+        <div
+          id="review-cycle-panel-calibration"
+          role="tabpanel"
+          aria-labelledby="review-cycle-tab-calibration"
+          tabIndex={0}
+          className="focus:outline-none"
+        >
+          <CalibrationPanel
+            cycleId={cycle.id}
+            cycleStatus={cycle.status}
+            snapshot={calibrationQuery.data}
+            isLoading={calibrationQuery.isLoading}
+            error={calibrationQuery.error}
+          />
+        </div>
+      )}
+
       {activeTab === "ratings" && (
-        <div className="space-y-4">
+        <div
+          id="review-cycle-panel-ratings"
+          role="tabpanel"
+          aria-labelledby="review-cycle-tab-ratings"
+          tabIndex={0}
+          className="space-y-4 focus:outline-none"
+        >
           <h3 className="text-lg font-semibold text-gray-900">{t("reviewCycleDetail.ratingDistribution")}</h3>
           {distribution.length === 0 || distribution.every((d) => d.count === 0) ? (
             <div className="rounded-lg border border-dashed border-gray-300 py-8 text-center">
@@ -549,8 +744,26 @@ export function ReviewCycleDetailPage() {
         </div>
       )}
 
+      {activeTab === "appeals" && cycle.status === "completed" && canGovernAppeals && (
+        <div
+          id="review-cycle-panel-appeals"
+          role="tabpanel"
+          aria-labelledby="review-cycle-tab-appeals"
+          tabIndex={0}
+          className="focus:outline-none"
+        >
+          <ReviewOutcomeAppealsPanel cycleId={cycle.id} />
+        </div>
+      )}
+
       {activeTab === "settings" && (
-        <div className="rounded-lg border border-gray-200 bg-white p-6 space-y-4">
+        <div
+          id="review-cycle-panel-settings"
+          role="tabpanel"
+          aria-labelledby="review-cycle-tab-settings"
+          tabIndex={0}
+          className="space-y-4 rounded-lg border border-gray-200 bg-white p-6 focus:outline-none"
+        >
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-semibold text-gray-900">{t("reviewCycleDetail.cycleSettings")}</h3>
             {cycle.status !== "completed" && cycle.status !== "cancelled" && (
@@ -644,8 +857,9 @@ function EditCycleForm({ cycle, onClose }: { cycle: CycleDetail; onClose: () => 
   const updateMutation = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
       apiPut(`/review-cycles/${cycle.id}`, body),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["review-cycle", cycle.id] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["review-cycle", cycle.id] });
+      await queryClient.invalidateQueries({ queryKey: ["review-cycles"] });
       onClose();
     },
   });

@@ -98,6 +98,14 @@ const MyPIPPage = lazy(() =>
 const MyPerformancePage = lazy(() =>
   import("@/pages/self-service/MyPerformancePage").then((m) => ({ default: m.MyPerformancePage })),
 );
+const MyReviewOutcomesPage = lazy(() =>
+  import("@/pages/self-service/MyReviewOutcomesPage").then((m) => ({
+    default: m.MyReviewOutcomesPage,
+  })),
+);
+const MyReviewOutcomePage = lazy(() =>
+  import("@/pages/self-service/MyReviewOutcomePage").then((m) => ({ default: m.MyReviewOutcomePage })),
+);
 const MyCareerPage = lazy(() =>
   import("@/pages/self-service/MyCareerPage").then((m) => ({ default: m.MyCareerPage })),
 );
@@ -249,6 +257,8 @@ export function AppRoutes() {
         {/* Self-Service */}
         <Route path="/my" element={<MyPerformancePage />} />
         <Route path="/my/performance" element={<MyPerformancePage />} />
+        <Route path="/my/performance/outcomes" element={<MyReviewOutcomesPage />} />
+        <Route path="/my/performance/reviews/:outcomeId" element={<MyReviewOutcomePage />} />
         <Route path="/my/goals" element={<MyGoalsPage />} />
         <Route path="/my/goals/:id" element={<MyGoalDetailPage />} />
         <Route path="/my/pip" element={<MyPIPPage />} />

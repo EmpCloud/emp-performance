@@ -22,6 +22,7 @@ const mockDB = {
   deleteMany: vi.fn().mockResolvedValue(0),
   count: vi.fn().mockResolvedValue(0),
   raw: vi.fn().mockResolvedValue([[]]),
+  transaction: vi.fn(),
 };
 
 vi.mock("../../db/adapters", () => ({
@@ -69,6 +70,7 @@ beforeEach(() => {
   mockDB.findMany.mockResolvedValue({ data: [], total: 0, page: 1, limit: 20, totalPages: 0 });
   mockDB.count.mockResolvedValue(0);
   mockDB.raw.mockResolvedValue([[]]);
+  mockDB.transaction.mockImplementation(async (callback: (trx: typeof mockDB) => unknown) => callback(mockDB));
   mockDB.create.mockImplementation((_t: string, d: any) => Promise.resolve({ id: "mock-id", ...d }));
   mockDB.update.mockImplementation((_t: string, id: string, d: any) => Promise.resolve({ id, ...d }));
 });

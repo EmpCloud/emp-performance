@@ -4,6 +4,7 @@
 // ============================================================================
 
 import { getDB } from "../../db/adapters";
+import type { IDataContext } from "../../db/adapters/interface";
 import {
   NotFoundError,
   ValidationError,
@@ -55,8 +56,12 @@ function assertEditableCycle(
   }
 }
 
-async function loadCycle(orgId: number, cycleId: string): Promise<ReviewCycle> {
-  const cycle = await getDB().findOne<ReviewCycle>("review_cycles", {
+async function loadCycle(
+  orgId: number,
+  cycleId: string,
+  context: IDataContext = getDB(),
+): Promise<ReviewCycle> {
+  const cycle = await context.findOne<ReviewCycle>("review_cycles", {
     id: cycleId,
     organization_id: orgId,
   });
@@ -66,8 +71,23 @@ async function loadCycle(orgId: number, cycleId: string): Promise<ReviewCycle> {
   return cycle;
 }
 
-async function assertCycleParticipant(cycleId: string, employeeId: number): Promise<void> {
-  const participant = await getDB().findOne("review_cycle_participants", {
+async function lockCycle(
+  context: IDataContext,
+  orgId: number,
+  cycleId: string,
+): Promise<void> {
+  await context.raw(
+    "SELECT id FROM review_cycles WHERE id = ? AND organization_id = ? FOR UPDATE",
+    [cycleId, orgId],
+  );
+}
+
+async function assertCycleParticipant(
+  cycleId: string,
+  employeeId: number,
+  context: IDataContext = getDB(),
+): Promise<void> {
+  const participant = await context.findOne("review_cycle_participants", {
     cycle_id: cycleId,
     employee_id: employeeId,
   });
@@ -168,6 +188,7 @@ async function validateCompetencyRatings(
   orgId: number,
   cycle: ReviewCycle,
   ratings: PeerCompetencyRating[] | undefined,
+  context: IDataContext = getDB(),
 ): Promise<void> {
   if (!ratings?.length) return;
 
@@ -184,10 +205,9 @@ async function validateCompetencyRatings(
     throw new ValidationError("This review cycle does not have a competency framework");
   }
 
-  const db = getDB();
   // Checking both id and organization_id prevents a corrupted/cross-tenant
   // framework reference from becoming an authorization bypass.
-  const framework = await db.findOne("competency_frameworks", {
+  const framework = await context.findOne("competency_frameworks", {
     id: cycle.framework_id,
     organization_id: orgId,
     is_active: true,
@@ -200,7 +220,7 @@ async function validateCompetencyRatings(
   // Query only the supplied IDs. Placeholders are generated from the bounded
   // array length; all values remain parameters, so no identifier enters SQL.
   const placeholders = ratingIds.map(() => "?").join(", ");
-  const competencyRows = await db.raw<any>(
+  const competencyRows = await context.raw<any>(
     `SELECT id FROM competencies WHERE framework_id = ? AND deleted_at IS NULL AND id IN (${placeholders})`,
     [cycle.framework_id, ...ratingIds],
   );
@@ -218,11 +238,11 @@ async function ensureCanonicalPeerReview(
   orgId: number,
   nomination: PeerNomination,
   participantVerified = false,
+  context: IDataContext = getDB(),
 ): Promise<Review> {
-  const db = getDB();
   if (!participantVerified) {
-    await loadCycle(orgId, nomination.cycle_id);
-    await assertCycleParticipant(nomination.cycle_id, nomination.employee_id);
+    await loadCycle(orgId, nomination.cycle_id, context);
+    await assertCycleParticipant(nomination.cycle_id, nomination.employee_id, context);
   }
   const assignment = {
     organization_id: orgId,
@@ -231,11 +251,11 @@ async function ensureCanonicalPeerReview(
     reviewer_id: nomination.nominee_id,
     type: "peer",
   };
-  const existing = await db.findOne<Review>("reviews", assignment);
+  const existing = await context.findOne<Review>("reviews", assignment);
   if (existing) return existing;
 
   try {
-    return await db.create<Review>("reviews", {
+    return await context.create<Review>("reviews", {
       id: uuidv4(),
       ...assignment,
       status: "pending",
@@ -248,7 +268,7 @@ async function ensureCanonicalPeerReview(
   } catch (error) {
     // The assignment tuple is protected by a unique index. If two approval
     // requests race, return the winner instead of surfacing a false failure.
-    const concurrent = await db.findOne<Review>("reviews", assignment);
+    const concurrent = await context.findOne<Review>("reviews", assignment);
     if (concurrent) return concurrent;
     throw error;
   }
@@ -262,16 +282,20 @@ async function syncCanonicalPeerReview(
     "overall_rating" | "ratings" | "strengths" | "improvements" | "comments" | "submitted_at"
   >,
   participantVerified = false,
+  context: IDataContext = getDB(),
 ): Promise<void> {
-  const db = getDB();
-  const review = await ensureCanonicalPeerReview(orgId, nomination, participantVerified);
+  const review = await ensureCanonicalPeerReview(
+    orgId,
+    nomination,
+    participantVerified,
+    context,
+  );
 
-  // The adapter's transaction callback is not bound to its CRUD methods, so
-  // this intentionally uses retry-safe replace semantics. A repeated submit
-  // repairs a partial synchronization from an earlier infrastructure failure.
-  await db.deleteMany("review_competency_ratings", { review_id: review.id });
+  // Replace semantics keep retries deterministic; the transaction-bound
+  // context makes the response and canonical review commit atomically.
+  await context.deleteMany("review_competency_ratings", { review_id: review.id });
   if (response.ratings.length) {
-    await db.createMany<ReviewCompetencyRating>(
+    await context.createMany<ReviewCompetencyRating>(
       "review_competency_ratings",
       response.ratings.map((rating) => ({
         id: uuidv4(),
@@ -283,7 +307,7 @@ async function syncCanonicalPeerReview(
     );
   }
 
-  await db.update<Review>("reviews", review.id, {
+  await context.update<Review>("reviews", review.id, {
     overall_rating: response.overall_rating,
     summary: response.comments ?? null,
     strengths: response.strengths ?? null,
@@ -307,8 +331,10 @@ export async function nominate(
   const db = getDB();
   assertActorOrganization(orgId, actor);
 
-  const cycle = await loadCycle(orgId, cycleId);
-  assertEditableCycle(cycle, NOMINATION_EDITABLE_STATUSES, "nominate a peer reviewer");
+  return db.transaction(async (trx) => {
+    await lockCycle(trx, orgId, cycleId);
+    const cycle = await loadCycle(orgId, cycleId, trx);
+    assertEditableCycle(cycle, NOMINATION_EDITABLE_STATUSES, "nominate a peer reviewer");
 
   // Employees may request peers only for their own review. HR/admin can
   // administer nominations for any employee in the tenant.
@@ -324,7 +350,7 @@ export async function nominate(
   // Verify both the subject employee and the nominated peer are real org users (#F4).
   await assertOrgMember(orgId, employeeId, "Employee");
   await assertOrgMember(orgId, peerId, "Nominated peer");
-  await assertCycleParticipant(cycleId, employeeId);
+  await assertCycleParticipant(cycleId, employeeId, trx);
 
   // Block only an OPEN duplicate (pending/approved). A previously DECLINED
   // nomination shouldn't lock the pair out for the rest of the cycle — the old
@@ -332,7 +358,7 @@ export async function nominate(
   // could never be re-nominated, and the "already nominated" error contradicted
   // the visible "declined" state (audit M3). Re-open the declined row instead of
   // creating a duplicate.
-  const existing = await db.findOne<PeerNomination>("peer_review_nominations", {
+  const existing = await trx.findOne<PeerNomination>("peer_review_nominations", {
     cycle_id: cycleId,
     employee_id: employeeId,
     nominee_id: peerId,
@@ -343,7 +369,7 @@ export async function nominate(
 
   if (existing) {
     // existing.status === "declined" — reuse the row for a fresh nomination.
-    const reopened = await db.update<PeerNomination>("peer_review_nominations", existing.id, {
+    const reopened = await trx.update<PeerNomination>("peer_review_nominations", existing.id, {
       status: "pending",
       nominated_by: actor.userId,
       approved_by: null,
@@ -356,7 +382,7 @@ export async function nominate(
 
   let nomination: PeerNomination;
   try {
-    nomination = await db.create<PeerNomination>("peer_review_nominations", {
+    nomination = await trx.create<PeerNomination>("peer_review_nominations", {
       cycle_id: cycleId,
       employee_id: employeeId,
       nominee_id: peerId,
@@ -367,7 +393,7 @@ export async function nominate(
   } catch (error) {
     // The tuple is unique. Convert a concurrent winning nomination into the
     // same domain conflict returned by the pre-insert duplicate check.
-    const concurrent = await db.findOne<PeerNomination>("peer_review_nominations", {
+    const concurrent = await trx.findOne<PeerNomination>("peer_review_nominations", {
       cycle_id: cycleId,
       employee_id: employeeId,
       nominee_id: peerId,
@@ -380,6 +406,7 @@ export async function nominate(
 
   logger.info(`Peer nomination created: employee=${employeeId}, peer=${peerId}, cycle=${cycleId}`);
   return nomination;
+  });
 }
 
 export async function listNominations(
@@ -460,35 +487,46 @@ export async function approveNomination(
     throw new ForbiddenError("Only HR or an administrator may approve peer nominations");
   }
 
-  const nomination = await db.findById<PeerNomination>("peer_review_nominations", nominationId);
-  if (!nomination) {
+  const pointer = await db.findById<PeerNomination>("peer_review_nominations", nominationId);
+  if (!pointer) {
     throw new NotFoundError("Peer nomination", nominationId);
   }
 
-  const cycle = await loadCycle(orgId, nomination.cycle_id);
-  assertEditableCycle(cycle, NOMINATION_EDITABLE_STATUSES, "approve a peer nomination");
-  await assertCycleParticipant(nomination.cycle_id, nomination.employee_id);
+  return db.transaction(async (trx) => {
+    await lockCycle(trx, orgId, pointer.cycle_id);
+    const nomination = await trx.findById<PeerNomination>(
+      "peer_review_nominations",
+      nominationId,
+    );
+    if (!nomination || nomination.cycle_id !== pointer.cycle_id) {
+      throw new NotFoundError("Peer nomination", nominationId);
+    }
 
-  if (nomination.status === "approved") {
-    // Idempotent repair for deployments where the nomination predates the
-    // canonical review bridge.
-    await ensureCanonicalPeerReview(orgId, nomination, true);
-    return nomination;
-  }
+    const cycle = await loadCycle(orgId, nomination.cycle_id, trx);
+    assertEditableCycle(cycle, NOMINATION_EDITABLE_STATUSES, "approve a peer nomination");
+    await assertCycleParticipant(nomination.cycle_id, nomination.employee_id, trx);
 
-  if (nomination.status !== "pending") {
-    throw new ValidationError(`Cannot approve nomination with status '${nomination.status}'`);
-  }
+    if (nomination.status === "approved") {
+      // Idempotent repair for deployments where the nomination predates the
+      // canonical review bridge.
+      await ensureCanonicalPeerReview(orgId, nomination, true, trx);
+      return nomination;
+    }
 
-  const updated = await db.update<PeerNomination>("peer_review_nominations", nominationId, {
-    status: "approved",
-    approved_by: actor.userId,
+    if (nomination.status !== "pending") {
+      throw new ValidationError(`Cannot approve nomination with status '${nomination.status}'`);
+    }
+
+    const updated = await trx.update<PeerNomination>("peer_review_nominations", nominationId, {
+      status: "approved",
+      approved_by: actor.userId,
+    });
+
+    await ensureCanonicalPeerReview(orgId, updated, true, trx);
+
+    logger.info(`Peer nomination approved: ${nominationId} by user ${actor.userId}`);
+    return updated;
   });
-
-  await ensureCanonicalPeerReview(orgId, updated, true);
-
-  logger.info(`Peer nomination approved: ${nominationId} by user ${actor.userId}`);
-  return updated;
 }
 
 export async function declineNomination(
@@ -502,28 +540,39 @@ export async function declineNomination(
     throw new ForbiddenError("Only HR or an administrator may decline peer nominations");
   }
 
-  const nomination = await db.findById<PeerNomination>("peer_review_nominations", nominationId);
-  if (!nomination) {
+  const pointer = await db.findById<PeerNomination>("peer_review_nominations", nominationId);
+  if (!pointer) {
     throw new NotFoundError("Peer nomination", nominationId);
   }
 
-  const cycle = await loadCycle(orgId, nomination.cycle_id);
-  assertEditableCycle(cycle, NOMINATION_EDITABLE_STATUSES, "decline a peer nomination");
+  return db.transaction(async (trx) => {
+    await lockCycle(trx, orgId, pointer.cycle_id);
+    const nomination = await trx.findById<PeerNomination>(
+      "peer_review_nominations",
+      nominationId,
+    );
+    if (!nomination || nomination.cycle_id !== pointer.cycle_id) {
+      throw new NotFoundError("Peer nomination", nominationId);
+    }
 
-  if (nomination.status !== "pending") {
-    throw new ValidationError(`Cannot decline nomination with status '${nomination.status}'`);
-  }
+    const cycle = await loadCycle(orgId, nomination.cycle_id, trx);
+    assertEditableCycle(cycle, NOMINATION_EDITABLE_STATUSES, "decline a peer nomination");
 
-  // Record the decline in dedicated columns; approved_by stays null so a
-  // declined nomination never masquerades as approved (#R4).
-  const updated = await db.update<PeerNomination>("peer_review_nominations", nominationId, {
-    status: "declined",
-    declined_by: actor.userId,
-    declined_at: new Date(),
+    if (nomination.status !== "pending") {
+      throw new ValidationError(`Cannot decline nomination with status '${nomination.status}'`);
+    }
+
+    // Record the decline in dedicated columns; approved_by stays null so a
+    // declined nomination never masquerades as approved (#R4).
+    const updated = await trx.update<PeerNomination>("peer_review_nominations", nominationId, {
+      status: "declined",
+      declined_by: actor.userId,
+      declined_at: new Date(),
+    });
+
+    logger.info(`Peer nomination declined: ${nominationId} by user ${actor.userId}`);
+    return updated;
   });
-
-  logger.info(`Peer nomination declined: ${nominationId} by user ${actor.userId}`);
-  return updated;
 }
 
 // ---------------------------------------------------------------------------
@@ -549,48 +598,83 @@ export async function submitPeerReview(
   const db = getDB();
   assertActorOrganization(orgId, actor);
 
-  const nomination = await db.findById<PeerNomination>("peer_review_nominations", nominationId);
-  if (!nomination) {
+  const pointer = await db.findById<PeerNomination>("peer_review_nominations", nominationId);
+  if (!pointer) {
     throw new NotFoundError("Peer nomination", nominationId);
   }
 
-  const cycle = await loadCycle(orgId, nomination.cycle_id);
-  assertEditableCycle(cycle, RESPONSE_EDITABLE_STATUSES, "submit a peer review");
-
-  // Only the nominated reviewer may submit, and only once the nomination is approved.
-  if (nomination.nominee_id !== actor.userId) {
-    // Conceal another reviewer's assignment from unrelated callers.
-    throw new NotFoundError("Peer nomination", nominationId);
-  }
-  if (nomination.status !== "approved") {
-    throw new ValidationError(
-      `Cannot submit a peer review for a nomination with status '${nomination.status}'`,
+  return db.transaction(async (trx) => {
+    await lockCycle(trx, orgId, pointer.cycle_id);
+    const nomination = await trx.findById<PeerNomination>(
+      "peer_review_nominations",
+      nominationId,
     );
-  }
+    if (!nomination || nomination.cycle_id !== pointer.cycle_id) {
+      throw new NotFoundError("Peer nomination", nominationId);
+    }
 
-  await assertCycleParticipant(nomination.cycle_id, nomination.employee_id);
+    const cycle = await loadCycle(orgId, nomination.cycle_id, trx);
+    assertEditableCycle(cycle, RESPONSE_EDITABLE_STATUSES, "submit a peer review");
 
-  await validateCompetencyRatings(orgId, cycle, data.ratings);
+    // Only the nominated reviewer may submit, and only once the nomination is approved.
+    if (nomination.nominee_id !== actor.userId) {
+      // Conceal another reviewer's assignment from unrelated callers.
+      throw new NotFoundError("Peer nomination", nominationId);
+    }
+    if (nomination.status !== "approved") {
+      throw new ValidationError(
+        `Cannot submit a peer review for a nomination with status '${nomination.status}'`,
+      );
+    }
 
-  const ratingsJson = data.ratings && data.ratings.length ? JSON.stringify(data.ratings) : null;
-  const submittedAt = new Date();
+    await assertCycleParticipant(nomination.cycle_id, nomination.employee_id, trx);
+    await validateCompetencyRatings(orgId, cycle, data.ratings, trx);
 
-  // Idempotency: reuse the existing response row for this nomination if present.
-  const existing = await db.findOne<PeerReviewResponse>("peer_review_responses", {
-    organization_id: orgId,
-    nomination_id: nominationId,
-  });
+    const ratingsJson = data.ratings && data.ratings.length ? JSON.stringify(data.ratings) : null;
+    const submittedAt = new Date();
 
-  if (existing) {
-    if (existing.status === "submitted") {
-      // A retry is safe and repairs the canonical review if the first request
-      // persisted the response but failed during the bridge synchronization.
-      const hydrated = hydrateResponse(existing);
-      await validateCompetencyRatings(orgId, cycle, hydrated.ratings);
-      await syncCanonicalPeerReview(orgId, nomination, hydrated, true);
+    // Idempotency: reuse the existing response row for this nomination if present.
+    const existing = await trx.findOne<PeerReviewResponse>("peer_review_responses", {
+      organization_id: orgId,
+      nomination_id: nominationId,
+    });
+
+    if (existing) {
+      if (existing.status === "submitted") {
+        // A retry is safe and repairs the canonical review if the first request
+        // persisted the response but failed during the bridge synchronization.
+        const hydrated = hydrateResponse(existing);
+        await validateCompetencyRatings(orgId, cycle, hydrated.ratings, trx);
+        await syncCanonicalPeerReview(orgId, nomination, hydrated, true, trx);
+        return hydrated;
+      }
+      const updated = await trx.update<PeerReviewResponse>(
+        "peer_review_responses",
+        existing.id,
+        {
+          overall_rating: data.overall_rating,
+          ratings: ratingsJson,
+          strengths: data.strengths ?? null,
+          improvements: data.improvements ?? null,
+          comments: data.comments ?? null,
+          status: "submitted",
+          submitted_at: submittedAt,
+        },
+      );
+      const hydrated = hydrateResponse(updated);
+      await syncCanonicalPeerReview(orgId, nomination, hydrated, true, trx);
+      logger.info(
+        `Peer review submitted (updated): nomination=${nominationId} reviewer=${actor.userId}`,
+      );
       return hydrated;
     }
-    const updated = await db.update<PeerReviewResponse>("peer_review_responses", existing.id, {
+
+    const created = await trx.create<PeerReviewResponse>("peer_review_responses", {
+      organization_id: orgId,
+      nomination_id: nominationId,
+      cycle_id: nomination.cycle_id,
+      reviewer_employee_id: actor.userId,
+      reviewee_employee_id: nomination.employee_id,
       overall_rating: data.overall_rating,
       ratings: ratingsJson,
       strengths: data.strengths ?? null,
@@ -599,33 +683,12 @@ export async function submitPeerReview(
       status: "submitted",
       submitted_at: submittedAt,
     });
-    const hydrated = hydrateResponse(updated);
-    await syncCanonicalPeerReview(orgId, nomination, hydrated, true);
-    logger.info(
-      `Peer review submitted (updated): nomination=${nominationId} reviewer=${actor.userId}`,
-    );
+
+    const hydrated = hydrateResponse(created);
+    await syncCanonicalPeerReview(orgId, nomination, hydrated, true, trx);
+    logger.info(`Peer review submitted: nomination=${nominationId} reviewer=${actor.userId}`);
     return hydrated;
-  }
-
-  const created = await db.create<PeerReviewResponse>("peer_review_responses", {
-    organization_id: orgId,
-    nomination_id: nominationId,
-    cycle_id: nomination.cycle_id,
-    reviewer_employee_id: actor.userId,
-    reviewee_employee_id: nomination.employee_id,
-    overall_rating: data.overall_rating,
-    ratings: ratingsJson,
-    strengths: data.strengths ?? null,
-    improvements: data.improvements ?? null,
-    comments: data.comments ?? null,
-    status: "submitted",
-    submitted_at: submittedAt,
   });
-
-  const hydrated = hydrateResponse(created);
-  await syncCanonicalPeerReview(orgId, nomination, hydrated, true);
-  logger.info(`Peer review submitted: nomination=${nominationId} reviewer=${actor.userId}`);
-  return hydrated;
 }
 
 /**
