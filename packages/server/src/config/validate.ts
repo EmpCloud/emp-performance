@@ -46,7 +46,7 @@ export function getConfigIssues(input: AppConfig = config): ConfigIssues {
   if (isProduction) {
     if (!input.sso.publicKey) errors.push("EMPCLOUD_SSO_PUBLIC_KEY is required in production");
     if (!input.sso.issuer) errors.push("EMPCLOUD_SSO_ISSUER is required in production");
-    if (!input.sso.audience) errors.push("EMPCLOUD_SSO_AUDIENCE is required in production");
+    // Core access tokens bind client_id and the stored grant; aud is optional.
     if (!input.sso.clientId) errors.push("EMPCLOUD_SSO_CLIENT_ID is required in production");
   }
 

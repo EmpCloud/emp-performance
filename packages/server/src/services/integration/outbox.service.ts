@@ -350,6 +350,7 @@ async function deliverEvent(
       "X-Idempotency-Key": event.idempotency_key,
       "X-EMPCloud-Timestamp": timestamp,
     };
+    if (webhook.apiKey) headers["X-API-Key"] = webhook.apiKey;
     if (webhook.secret) {
       headers["X-EMPCloud-Signature"] = createWebhookSignature(
         event.id,

@@ -118,6 +118,7 @@ export const config = {
   empcloudWebhook: {
     url: process.env.EMPCLOUD_WEBHOOK_URL || undefined,
     secret: process.env.EMPCLOUD_WEBHOOK_SECRET || undefined,
+    apiKey: process.env.EMPCLOUD_WEBHOOK_API_KEY || undefined,
     timeoutMs: parseInt(process.env.EMPCLOUD_WEBHOOK_TIMEOUT_MS || "10000"),
     pollIntervalMs: parseInt(process.env.OUTBOX_POLL_INTERVAL_MS || "5000"),
     batchSize: parseInt(process.env.OUTBOX_BATCH_SIZE || "25"),

@@ -65,6 +65,14 @@ function productionConfig(): any {
 }
 
 describe("production configuration validation", () => {
+  it("accepts core access tokens bound by client_id without an aud claim", () => {
+    const candidate = productionConfig();
+    candidate.sso.audience = undefined;
+    expect(getConfigIssues(candidate).errors).toEqual([]);
+    candidate.sso.clientId = "";
+    expect(getConfigIssues(candidate).errors).toContain("EMPCLOUD_SSO_CLIENT_ID is required in production");
+  });
+
   it("accepts a complete production configuration", () => {
     const candidate = productionConfig();
     expect(getConfigIssues(candidate).errors).toEqual([]);

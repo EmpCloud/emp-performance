@@ -81,6 +81,7 @@ describe("integration outbox", () => {
     Object.assign(config.empcloudWebhook as any, {
       url: "https://empcloud.example.test/hooks/performance",
       secret: "test-secret",
+      apiKey: "core-api-key",
       timeoutMs: 1000,
       batchSize: 25,
       leaseSeconds: 60,
@@ -178,6 +179,7 @@ describe("integration outbox", () => {
     const [url, request] = fetchImpl.mock.calls[0];
     expect(url).toBe("https://empcloud.example.test/hooks/performance");
     expect(request.headers).toMatchObject({
+      "X-API-Key": "core-api-key",
       "X-Event-Id": "event-1",
       "X-Idempotency-Key": "performance.cycle_completed:cycle-1:v1",
       "X-EMPCloud-Timestamp": NOW.toISOString(),
