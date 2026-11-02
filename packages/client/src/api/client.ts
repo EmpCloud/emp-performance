@@ -6,6 +6,7 @@ const API_BASE = import.meta.env.VITE_API_URL || "/api/v1";
 export const api = axios.create({
   baseURL: API_BASE,
   headers: { "Content-Type": "application/json" },
+  withCredentials: true,
 });
 
 // Attach JWT token to every request
@@ -21,7 +22,7 @@ api.interceptors.request.use((config) => {
 // Token refresh logic
 // ---------------------------------------------------------------------------
 let isRefreshing = false;
-let refreshSubscribers: ((token: string) => void)[] = [];
+let refreshSubscribers: Array<(token: string) => void> = [];
 
 function subscribeTokenRefresh(cb: (token: string) => void) {
   refreshSubscribers.push(cb);
@@ -33,19 +34,15 @@ function onTokenRefreshed(newToken: string) {
 }
 
 async function tryRefreshToken(): Promise<string | null> {
-  const refreshToken = localStorage.getItem("refresh_token");
-  if (!refreshToken) return null;
-
   try {
-    const { data } = await axios.post<ApiResponse<{ accessToken: string; refreshToken: string }>>(
+    const { data } = await axios.post<ApiResponse<{ accessToken: string }>>(
       `${API_BASE}/auth/refresh-token`,
-      { refreshToken },
-      { headers: { "Content-Type": "application/json" } },
+      {},
+      { headers: { "Content-Type": "application/json" }, withCredentials: true },
     );
     if (data.success && data.data) {
-      const { accessToken, refreshToken: newRefresh } = data.data;
+      const { accessToken } = data.data;
       localStorage.setItem("access_token", accessToken);
-      localStorage.setItem("refresh_token", newRefresh);
       return accessToken;
     }
   } catch {

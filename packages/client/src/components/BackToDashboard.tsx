@@ -1,12 +1,11 @@
 import { ArrowLeft } from "lucide-react";
+import { sanitizeEmpCloudReturnUrl } from "@/lib/sso-return-url";
 
 export function BackToDashboard() {
   const isSSO = localStorage.getItem("sso_source") === "empcloud";
   if (!isSSO) return null;
 
-  const returnUrl =
-    localStorage.getItem("empcloud_return_url") ||
-    "https://test-empcloud.empcloud.com/dashboard";
+  const returnUrl = sanitizeEmpCloudReturnUrl(localStorage.getItem("empcloud_return_url"));
 
   return (
     <a

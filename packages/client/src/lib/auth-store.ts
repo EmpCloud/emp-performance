@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { CanonicalRole } from "@emp-performance/shared";
+import { sanitizeEmpCloudReturnUrl } from "./sso-return-url";
 
 export interface AuthUser {
   id: number;
@@ -17,9 +18,8 @@ export interface AuthUser {
 interface AuthState {
   user: AuthUser | null;
   accessToken: string | null;
-  refreshToken: string | null;
   isAuthenticated: boolean;
-  login: (user: AuthUser, tokens: { accessToken: string; refreshToken: string }) => void;
+  login: (user: AuthUser, tokens: { accessToken: string }) => void;
   logout: () => void;
   loadFromStorage: () => void;
 }
@@ -27,51 +27,43 @@ interface AuthState {
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   accessToken: null,
-  refreshToken: null,
   isAuthenticated: false,
 
   login: (user, tokens) => {
     localStorage.setItem("access_token", tokens.accessToken);
-    localStorage.setItem("refresh_token", tokens.refreshToken);
+    localStorage.removeItem("refresh_token");
     localStorage.setItem("user", JSON.stringify(user));
     set({
       user,
       accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
       isAuthenticated: true,
     });
   },
 
   logout: () => {
-    // Best-effort server-side revocation of the refresh token (PL3). We use a
-    // keepalive fetch so it completes even as we navigate away, and never block
-    // the client-side teardown on it.
-    const refreshToken = localStorage.getItem("refresh_token");
-    const accessToken = localStorage.getItem("access_token");
-    if (refreshToken) {
-      const base = (import.meta as any).env?.VITE_API_URL || "/api/v1";
-      try {
-        void fetch(`${base}/auth/logout`, {
-          method: "POST",
-          keepalive: true,
-          headers: {
-            "Content-Type": "application/json",
-            ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-          },
-          body: JSON.stringify({ refreshToken }),
-        });
-      } catch {
+    // Revoke and clear the HttpOnly refresh cookie even if the access token has
+    // expired. Local teardown remains immediate and independent of the request.
+    const base = (import.meta as any).env?.VITE_API_URL || "/api/v1";
+    try {
+      void fetch(`${base}/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+        keepalive: true,
+      });
+    } catch {
         // ignore — local teardown proceeds regardless
-      }
     }
     localStorage.removeItem("access_token");
     localStorage.removeItem("refresh_token");
     localStorage.removeItem("user");
-    set({ user: null, accessToken: null, refreshToken: null, isAuthenticated: false });
+    localStorage.removeItem("sso_source");
+    localStorage.removeItem("empcloud_return_url");
+    set({ user: null, accessToken: null, isAuthenticated: false });
     window.location.href = "/login";
   },
 
   loadFromStorage: () => {
+    localStorage.removeItem("refresh_token");
     const token = localStorage.getItem("access_token");
     const userStr = localStorage.getItem("user");
     if (token && userStr) {
@@ -80,7 +72,6 @@ export const useAuthStore = create<AuthState>((set) => ({
         set({
           user,
           accessToken: token,
-          refreshToken: localStorage.getItem("refresh_token"),
           isAuthenticated: true,
         });
       } catch {
@@ -106,8 +97,8 @@ export function extractSSOToken(): string | null {
 
   // Mark that this session came from EMP Cloud SSO
   localStorage.setItem('sso_source', 'empcloud');
-  const returnUrl = params.get('return_url') || 'https://test-empcloud.empcloud.com/dashboard';
-  localStorage.setItem('empcloud_return_url', returnUrl);
+  const returnUrl = sanitizeEmpCloudReturnUrl(params.get("return_url"));
+  localStorage.setItem("empcloud_return_url", returnUrl);
 
   // Clean the URL immediately so the token doesn't linger
   const url = new URL(window.location.href);

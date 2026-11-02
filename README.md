@@ -14,24 +14,29 @@ EMP Performance is the performance management module of the EmpCloud ecosystem. 
 
 ## Project Status
 
-**Built** -- all phases implemented and tested.
+**Phase 5 production hardening is implemented.** The deterministic release
+suite, production build, migration gate, readiness smoke check, and dependency
+audit are enforced by CI.
 
-| Test Suite | Count | Details |
-|------------|-------|---------|
-| API endpoint tests | 128 | Full endpoint coverage across all route files |
-| E2E workflow tests | 34 | Complete review cycle and goal workflows |
-| E2E advanced workflows | 62 | Multi-step flows: 360 reviews, PIPs, succession, letters |
-| Unit tests (feedback) | 11 | Feedback service logic |
-| Unit tests (goals) | 14 | Goal service logic, key results, check-ins |
-| Unit tests (review cycles) | 14 | Review cycle service logic, launch, close |
-| **Total** | **263** | All passing |
+| Gate | Status | Details |
+|------|--------|---------|
+| Deterministic server tests | Passing | 430+ policy, service, security, runtime, and route tests |
+| Production build | Passing | Shared, server, and client TypeScript/Vite artifacts |
+| Dependency audit | Passing | CI rejects high/critical production advisories |
+| Migration verification | Passing | Compiled migration artifact runs against fresh MySQL |
+| Readiness smoke | Passing | Local built server must reach `/health/ready` |
+
+Historical coverage-push mocks, developer-owned real-database suites, and HTTP
+tests that defaulted to an external environment are available through
+`pnpm test:all`, but are intentionally excluded from the deterministic release
+gate until their obsolete fixtures are modernized.
 
 ### Metrics
 
 | Metric | Count |
 |--------|-------|
 | Database tables | 29+ |
-| Database migrations | 6 |
+| Database migrations | 29 |
 | API route files | 17 |
 | Service modules | 21 |
 | Frontend pages | 44 |
@@ -57,14 +62,14 @@ EMP Performance is the performance management module of the EmpCloud ecosystem. 
 | 9-Box Grid | Built | Performance vs Potential matrix with color-coded cells, drag-to-reposition, history tracking |
 | Succession Planning | Built | Succession plans per critical role, candidate readiness tracking, development actions |
 | Goal Alignment Tree | Built | Company -> department -> team -> individual goal cascade with progress rollup |
-| Performance Letter Generation | Built | Appraisal, increment, promotion, confirmation, warning letter templates (Handlebars + PDF) |
+| Performance Letter Generation | Built | Appraisal, increment, promotion, confirmation, and warning templates with safe token rendering |
 | Skills Gap Analysis | Built | Radar chart visualization, gap table, learning recommendations per employee |
 | Manager Effectiveness | Built | Manager scoring based on team metrics, review completion, feedback quality, 1:1 frequency |
 | AI Review Summaries | Built | AI-powered summary generation for review cycles, individual reviews, and team performance |
 | Automated Email Reminders | Built | BullMQ daily jobs for review deadlines, PIP check-ins, meeting reminders, goal due dates |
 | Notification Settings | Built | Configurable reminder schedules per org, opt-in/out per notification type |
 | SSO Authentication | Built | Single sign-on from EMP Cloud dashboard via JWT token exchange |
-| API Documentation | Built | Swagger UI at /api/docs with OpenAPI 3.0 spec |
+| API Documentation | Built | Swagger/OpenAPI in development; production exposure is explicit opt-in |
 
 ---
 
@@ -80,8 +85,8 @@ EMP Performance is the performance management module of the EmpCloud ecosystem. 
 | Cache / Queue | Redis 7, BullMQ |
 | Auth | OAuth2/OIDC via EMP Cloud (RS256 JWT verification), SSO token exchange |
 | Charts | Recharts (bell curve, radar, trends, 9-box grid) |
-| PDF Generation | Puppeteer / Handlebars |
-| AI | OpenAI/Claude for review summary generation |
+| Letter Rendering | Escaped server-side template tokens |
+| AI | Template summaries with optional OpenAI enhancement |
 | Testing | Vitest (API + unit tests) |
 | API Docs | Swagger UI + OpenAPI 3.0 |
 | Monorepo | pnpm workspaces |
@@ -95,7 +100,9 @@ emp-performance/
   package.json
   pnpm-workspace.yaml
   tsconfig.json
-  docker-compose.yml
+  docker/                        # Production server/client Dockerfiles and Nginx config
+  scripts/                       # Readiness smoke check and PM2 release definition
+  docs/production-runbook.md     # Deployment, rollback, and incident procedures
   .env.example
   packages/
     shared/                     # @emp-performance/shared
@@ -110,13 +117,15 @@ emp-performance/
           connection.ts         # Knex connection to emp_performance
           empcloud.ts           # Read-only connection to empcloud DB
           migrations/
-            sql/                # 6 migration files
+            sql/                # 29 ordered migration files
               001_initial_schema.ts
               002_nine_box.ts
               003_notification_settings.ts
               004_performance_letters.ts
               005_participant_final_rating.ts
               006_manager_effectiveness.ts
+              ...
+              029_review_outcome_revision_scoping.ts
         api/
           middleware/            # auth, RBAC, error handling
           routes/               # 17 route files
@@ -215,7 +224,7 @@ emp-performance/
 | `manager_effectiveness_scores` | Manager effectiveness ratings and metrics |
 | `audit_logs` | Module-specific audit trail |
 
-**6 migrations** across the database schema.
+**29 migrations** across the database schema.
 
 ---
 
@@ -389,7 +398,8 @@ All endpoints under `/api/v1/`. Server runs on port **4300**.
 ### Other Endpoints
 - **Self-Service**: My reviews, goals, PIPs, 1:1s, feedback, career track, skills gap, letters
 - **API Docs**: Swagger UI at `/api/docs`
-- **Health**: GET `/health` for service health check
+- **Liveness**: GET `/health/live` confirms that the process is running
+- **Readiness**: GET `/health/ready` confirms required dependencies are available
 
 ---
 
@@ -497,42 +507,61 @@ cp .env.example .env
 # Edit .env with your database credentials and EMP Cloud URL
 ```
 
-Key environment variables:
+Key environment variables are documented in [`.env.example`](.env.example). A
+minimal local configuration is:
 ```env
 # Server
 PORT=4300
 NODE_ENV=development
+APP_URL=http://localhost:5177
+CORS_ORIGIN=http://localhost:5177
 
-# Database
+# Performance database
 DB_HOST=localhost
 DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=secret
 DB_NAME=emp_performance
 
-# EMP Cloud (required for auth)
+# Shared EMP Cloud database and SSO
+EMPCLOUD_DB_HOST=localhost
+EMPCLOUD_DB_USER=root
+EMPCLOUD_DB_PASSWORD=secret
 EMPCLOUD_DB_NAME=empcloud
-EMPCLOUD_API_URL=http://localhost:3000
-EMPCLOUD_PUBLIC_KEY_PATH=./keys/public.pem
+EMPCLOUD_SSO_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\nreplace-me\n-----END PUBLIC KEY-----"
+EMPCLOUD_SSO_ISSUER=empcloud
+EMPCLOUD_SSO_AUDIENCE=emp-performance
+
+JWT_SECRET=replace-with-at-least-32-random-characters
 
 # Redis
 REDIS_HOST=localhost
 REDIS_PORT=6379
 
-# AI (for review summaries)
-OPENAI_API_KEY=sk-...
-# or
-ANTHROPIC_API_KEY=sk-ant-...
-
-# Email (for reminders)
-SMTP_HOST=localhost
-SMTP_PORT=1025
+# Client build configuration
+VITE_API_URL=/api/v1
+VITE_SSO_LOGIN_URL=http://localhost:3000/sso/emp-performance
+VITE_EMPCLOUD_RETURN_ORIGINS=https://app.empcloud.com
 ```
 
 ### Docker
+
+The repository provides independently deployable server and client images. A
+container platform must provide MySQL, Redis, secrets, the
+`performance-server` service name, and a dedicated migration job.
+
 ```bash
-docker-compose up -d
+docker build -f docker/Dockerfile.server -t emp-performance-server:local .
+docker build \
+  -f docker/Dockerfile.client \
+  --build-arg VITE_API_URL=/api/v1 \
+  --build-arg VITE_SSO_LOGIN_URL=http://localhost:3000/sso/emp-performance \
+  --build-arg VITE_EMPCLOUD_RETURN_ORIGINS=https://app.empcloud.com \
+  -t emp-performance-client:local .
 ```
+
+See [the production runbook](docs/production-runbook.md) for health checks,
+release configuration, migration policy, and rollback procedures.
 
 ### Development
 ```bash
@@ -544,7 +573,7 @@ pnpm --filter @emp-performance/server dev    # Server on :4300
 pnpm --filter @emp-performance/client dev    # Client on :5177
 
 # Run migrations
-pnpm --filter @emp-performance/server migrate
+pnpm db:migrate
 ```
 
 Once running, visit:
@@ -552,19 +581,25 @@ Once running, visit:
 - **API**: http://localhost:4300
 - **API Documentation**: http://localhost:4300/api/docs
 
+### Production deployment
+
+Pushes to `main` deploy only after the `CI` workflow succeeds. The deployment
+uses SSH keys, immutable release worktrees, a frozen install, build and migration
+step, PM2 graceful reload, `/health/ready` verification, and application rollback
+to the previous release when verification fails. Configure the protected GitHub
+environment and host by following
+[docs/production-runbook.md](docs/production-runbook.md).
+
 ### Running Tests
 ```bash
-# Run all tests (API + unit)
-pnpm --filter @emp-performance/server test
+# Run the deterministic release suite
+pnpm test:ci
 
-# Run only unit tests
-pnpm --filter @emp-performance/server test -- --grep "service"
+# Equivalent default workspace test
+pnpm test
 
-# Run only API tests
-pnpm --filter @emp-performance/server test -- --grep "API"
-
-# Run E2E workflow tests
-pnpm --filter @emp-performance/server test -- --grep "workflow"
+# Run historical/real-database/external suites for fixture modernization
+pnpm test:all
 ```
 
 ---

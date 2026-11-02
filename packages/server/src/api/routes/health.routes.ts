@@ -1,19 +1,43 @@
 import { Router, Request, Response } from "express";
 import { config } from "../../config";
+import { getReadinessReport } from "../../runtime/health";
+import { runtimeState } from "../../runtime/runtime-state";
 
 const router = Router();
+const VERSION = "0.1.0";
+
+function livenessPayload() {
+  return {
+    status: "ok",
+    version: VERSION,
+    release: config.runtime.releaseSha,
+    timestamp: new Date().toISOString(),
+  };
+}
 
 router.get("/", (_req: Request, res: Response) => {
-  res.json({
-    status: "ok",
-    version: "0.1.0",
-    timestamp: new Date().toISOString(),
-  });
+  // Backwards-compatible liveness endpoint. New orchestrators should use the
+  // explicit /live and /ready endpoints below.
+  res.json(livenessPayload());
+});
+
+router.get("/live", (_req: Request, res: Response) => {
+  res.json(livenessPayload());
+});
+
+router.get("/ready", async (_req: Request, res: Response) => {
+  const report = await getReadinessReport();
+  res.status(report.status === "ready" ? 200 : 503).json(report);
 });
 
 router.get("/detailed", async (_req: Request, res: Response) => {
+  if (config.env === "production" && !config.security.diagnosticsEnabled) {
+    return res.sendStatus(404);
+  }
+
   const start = Date.now();
-  const checks: Record<string, any> = {};
+  const readiness = await getReadinessReport();
+  const checks: Record<string, unknown> = { ...readiness.checks };
 
   // Memory
   const mem = process.memoryUsage();
@@ -38,12 +62,14 @@ router.get("/detailed", async (_req: Request, res: Response) => {
     formatted: parts.join(" "),
   };
 
-  res.json({
-    status: "healthy",
+  res.status(readiness.status === "ready" ? 200 : 503).json({
+    status: readiness.status === "ready" ? "healthy" : "unhealthy",
     timestamp: new Date().toISOString(),
     responseTime: `${Date.now() - start}ms`,
-    version: "0.1.0",
+    version: VERSION,
+    release: config.runtime.releaseSha,
     environment: config.env,
+    runtime: runtimeState.snapshot(),
     checks,
   });
 });

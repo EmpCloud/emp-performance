@@ -29,7 +29,7 @@ export function RegisterPage() {
     }
     setSubmitting(true);
     try {
-      const res = await apiPost<{ user: any; tokens: { accessToken: string; refreshToken: string } }>(
+      const res = await apiPost<{ user: any; tokens: { accessToken: string } }>(
         "/auth/register",
         form,
       );

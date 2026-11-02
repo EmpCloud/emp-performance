@@ -3,15 +3,30 @@ import { ZodError } from "zod";
 import { logger } from "../../utils/logger";
 import { AppError } from "../../utils/errors";
 import type { ApiResponse } from "@emp-performance/shared";
+import { config } from "../../config";
 
-export function errorHandler(err: Error, _req: Request, res: Response, _next: NextFunction) {
+type ErrorResponse = ApiResponse<null> & { requestId?: string };
+
+export function errorHandler(err: Error, req: Request, res: Response, _next: NextFunction) {
   if (err instanceof AppError) {
-    const response: ApiResponse<null> = {
+    if (err.statusCode >= 500) {
+      logger.error("request_failed", {
+        requestId: req.requestId,
+        statusCode: err.statusCode,
+        code: err.code,
+        error: err,
+      });
+    }
+    const response: ErrorResponse = {
       success: false,
+      requestId: req.requestId,
       error: {
         code: err.code,
-        message: err.message,
-        details: err.details,
+        message:
+          config.env === "production" && err.statusCode >= 500
+            ? "An unexpected error occurred"
+            : err.message,
+        details: config.env === "production" && err.statusCode >= 500 ? undefined : err.details,
       },
     };
     return res.status(err.statusCode).json(response);
@@ -19,8 +34,9 @@ export function errorHandler(err: Error, _req: Request, res: Response, _next: Ne
 
   // Handle Zod validation errors as 400
   if (err instanceof ZodError) {
-    const response: ApiResponse<null> = {
+    const response: ErrorResponse = {
       success: false,
+      requestId: req.requestId,
       error: {
         code: "VALIDATION_ERROR",
         message: "Invalid request data",
@@ -30,14 +46,14 @@ export function errorHandler(err: Error, _req: Request, res: Response, _next: Ne
     return res.status(400).json(response);
   }
 
-  logger.error("Unhandled error:", err);
+  logger.error("unhandled_request_error", { requestId: req.requestId, error: err });
 
-  const isDev = process.env.NODE_ENV !== "production";
-  const response: ApiResponse<null> = {
+  const response: ErrorResponse = {
     success: false,
+    requestId: req.requestId,
     error: {
       code: "INTERNAL_ERROR",
-      message: isDev ? err.message : "An unexpected error occurred",
+      message: config.env !== "production" ? err.message : "An unexpected error occurred",
     },
   };
   return res.status(500).json(response);

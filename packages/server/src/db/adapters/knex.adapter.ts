@@ -4,11 +4,58 @@
 
 import knex from "knex";
 import type { Knex } from "knex";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import { IDBAdapter, QueryOptions, QueryResult, TransactionContext } from "./interface";
 
 type DbExecutor = Knex | Knex.Transaction;
+
+type MigrationFile = {
+  filePath: string;
+  canonicalName: string;
+};
+
+/**
+ * Knex records migration filenames in its ledger. Development runs the source
+ * `.ts` files while production runs the compiled `.js` files, so the default
+ * file migration source would report two different names for the same
+ * migration. Keep the ledger name stable across both runtimes.
+ */
+export class CanonicalMigrationSource implements Knex.MigrationSource<MigrationFile> {
+  constructor(
+    private readonly directory: string,
+    private readonly runtimeExtension: string
+  ) {}
+
+  async getMigrations(_loadExtensions: readonly string[]): Promise<MigrationFile[]> {
+    const extension = `.${this.runtimeExtension}`;
+    const entries = await readdir(this.directory, { withFileTypes: true });
+
+    return entries
+      .filter((entry) => entry.isFile() && path.extname(entry.name) === extension)
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map((entry) => ({
+        filePath: path.join(this.directory, entry.name),
+        canonicalName: `${path.basename(entry.name, extension)}.ts`,
+      }));
+  }
+
+  getMigrationName(migration: MigrationFile): string {
+    return migration.canonicalName;
+  }
+
+  async getMigration(migration: MigrationFile): Promise<Knex.Migration> {
+    const loaded = (await import(migration.filePath)) as typeof import("knex") & {
+      default?: Knex.Migration;
+      up?: Knex.Migration["up"];
+      down?: Knex.Migration["down"];
+    };
+
+    if (loaded.default) return loaded.default;
+    return loaded as unknown as Knex.Migration;
+  }
+}
 
 export class KnexAdapter implements IDBAdapter {
   private db: Knex | null = null;
@@ -25,6 +72,7 @@ export class KnexAdapter implements IDBAdapter {
     pool?: { min: number; max: number };
   }) {
     const runtimeExtension = path.extname(__filename).slice(1) || "js";
+    const migrationDirectory = path.resolve(__dirname, "../migrations/sql");
     this.config = {
       client: config.client,
       connection: {
@@ -36,8 +84,10 @@ export class KnexAdapter implements IDBAdapter {
       },
       pool: config.pool || { min: 2, max: 10 },
       migrations: {
-        directory: path.resolve(__dirname, "../migrations/sql"),
-        extension: runtimeExtension,
+        migrationSource: new CanonicalMigrationSource(
+          migrationDirectory,
+          runtimeExtension
+        ),
       },
       seeds: {
         directory: path.resolve(__dirname, "../seeds/sql"),
