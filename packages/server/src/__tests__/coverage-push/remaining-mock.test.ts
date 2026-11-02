@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { ActorContext } from "../../security/actor-context";
 
 // ---------------------------------------------------------------------------
 // Mock DB adapter
@@ -8,8 +9,10 @@ const mockDB: any = {
   findMany: vi.fn().mockResolvedValue({ data: [], total: 0, page: 1, limit: 20, totalPages: 0 }),
   findById: vi.fn(),
   create: vi.fn(),
+  createMany: vi.fn(),
   update: vi.fn(),
   delete: vi.fn(),
+  deleteMany: vi.fn(),
   count: vi.fn().mockResolvedValue(0),
   raw: vi.fn().mockResolvedValue([[]]),
 };
@@ -244,6 +247,22 @@ import {
 } from "../../services/career/career-path.service";
 
 const ORG = 1;
+const PEER_ADMIN_ACTOR: ActorContext = {
+  userId: 20,
+  employeeId: 20,
+  organizationId: ORG,
+  role: "hr_admin",
+  roles: ["hr_admin"],
+  authenticationMethod: "jwt",
+};
+const PEER_EMPLOYEE_ACTOR: ActorContext = {
+  userId: 10,
+  employeeId: 10,
+  organizationId: ORG,
+  role: "employee",
+  roles: ["employee"],
+  authenticationMethod: "jwt",
+};
 
 describe("career-path.service", () => {
   beforeEach(() => {
@@ -1201,32 +1220,39 @@ describe("peer-review.service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockDB.findMany.mockResolvedValue({ data: [], total: 0, page: 1, limit: 20, totalPages: 0 });
+    mockedFindUserById.mockImplementation(async (id: number) => ({
+      id,
+      organization_id: ORG,
+      status: 1,
+    } as any));
   });
 
   describe("nominate", () => {
     it("should throw if cycle not found", async () => {
       mockDB.findOne.mockResolvedValue(null);
-      await expect(nominate(ORG, "x", 10, 20, 10)).rejects.toThrow("Review cycle");
+      await expect(nominate(ORG, "x", 10, 20, PEER_EMPLOYEE_ACTOR)).rejects.toThrow("Review cycle");
     });
 
     it("should throw on self-nomination", async () => {
-      mockDB.findOne.mockResolvedValue({ id: "c-1" });
-      await expect(nominate(ORG, "c-1", 10, 10, 10)).rejects.toThrow("self");
+      mockDB.findOne.mockResolvedValue({ id: "c-1", status: "active" });
+      await expect(nominate(ORG, "c-1", 10, 10, PEER_EMPLOYEE_ACTOR)).rejects.toThrow("self");
     });
 
     it("should throw on duplicate nomination", async () => {
       mockDB.findOne
-        .mockResolvedValueOnce({ id: "c-1" }) // cycle
-        .mockResolvedValueOnce({ id: "nom-existing" }); // existing
-      await expect(nominate(ORG, "c-1", 10, 20, 10)).rejects.toThrow("already been nominated");
+        .mockResolvedValueOnce({ id: "c-1", status: "active" }) // cycle
+        .mockResolvedValueOnce({ id: "participant-1" }) // cycle participant
+        .mockResolvedValueOnce({ id: "nom-existing", status: "pending" }); // existing
+      await expect(nominate(ORG, "c-1", 10, 20, PEER_EMPLOYEE_ACTOR)).rejects.toThrow("already been nominated");
     });
 
     it("should create nomination", async () => {
       mockDB.findOne
-        .mockResolvedValueOnce({ id: "c-1" }) // cycle
+        .mockResolvedValueOnce({ id: "c-1", status: "active" }) // cycle
+        .mockResolvedValueOnce({ id: "participant-1" }) // cycle participant
         .mockResolvedValueOnce(null); // no existing
       mockDB.create.mockResolvedValue({ id: "nom-1", status: "pending" });
-      const result = await nominate(ORG, "c-1", 10, 20, 10);
+      const result = await nominate(ORG, "c-1", 10, 20, PEER_EMPLOYEE_ACTOR);
       expect(result.status).toBe("pending");
     });
   });
@@ -1234,13 +1260,13 @@ describe("peer-review.service", () => {
   describe("listNominations", () => {
     it("should throw if cycle not found", async () => {
       mockDB.findOne.mockResolvedValue(null);
-      await expect(listNominations(ORG, "x")).rejects.toThrow("Review cycle");
+      await expect(listNominations(ORG, "x", PEER_ADMIN_ACTOR)).rejects.toThrow("Review cycle");
     });
 
     it("should list with filters", async () => {
-      mockDB.findOne.mockResolvedValue({ id: "c-1" });
+      mockDB.findOne.mockResolvedValue({ id: "c-1", status: "active" });
       mockDB.findMany.mockResolvedValue({ data: [{ id: "nom-1" }], total: 1, page: 1, limit: 50, totalPages: 1 });
-      await listNominations(ORG, "c-1", { employeeId: 10, nomineeId: 20, status: "pending", page: 2, limit: 10 });
+      await listNominations(ORG, "c-1", PEER_ADMIN_ACTOR, { employeeId: 10, nomineeId: 20, status: "pending", page: 2, limit: 10 });
       expect(mockDB.findMany).toHaveBeenCalled();
     });
   });
@@ -1248,26 +1274,30 @@ describe("peer-review.service", () => {
   describe("approveNomination", () => {
     it("should throw if not found", async () => {
       mockDB.findById.mockResolvedValue(null);
-      await expect(approveNomination(ORG, "x", 20)).rejects.toThrow("Peer nomination");
+      await expect(approveNomination(ORG, "x", PEER_ADMIN_ACTOR)).rejects.toThrow("Peer nomination");
     });
 
     it("should throw if cycle not in org", async () => {
       mockDB.findById.mockResolvedValue({ id: "nom-1", cycle_id: "c-1", status: "pending" });
       mockDB.findOne.mockResolvedValue(null);
-      await expect(approveNomination(ORG, "nom-1", 20)).rejects.toThrow("Review cycle");
+      await expect(approveNomination(ORG, "nom-1", PEER_ADMIN_ACTOR)).rejects.toThrow("Review cycle");
     });
 
     it("should throw if not pending", async () => {
       mockDB.findById.mockResolvedValue({ id: "nom-1", cycle_id: "c-1", status: "approved" });
-      mockDB.findOne.mockResolvedValue({ id: "c-1" });
-      await expect(approveNomination(ORG, "nom-1", 20)).rejects.toThrow("approve nomination");
+      mockDB.findOne.mockResolvedValue({ id: "c-1", status: "completed" });
+      await expect(approveNomination(ORG, "nom-1", PEER_ADMIN_ACTOR)).rejects.toThrow("approve a peer nomination");
     });
 
     it("should approve nomination", async () => {
-      mockDB.findById.mockResolvedValue({ id: "nom-1", cycle_id: "c-1", status: "pending" });
-      mockDB.findOne.mockResolvedValue({ id: "c-1" });
-      mockDB.update.mockResolvedValue({ id: "nom-1", status: "approved" });
-      const result = await approveNomination(ORG, "nom-1", 20);
+      mockDB.findById.mockResolvedValue({ id: "nom-1", cycle_id: "c-1", employee_id: 10, nominee_id: 20, status: "pending" });
+      mockDB.findOne
+        .mockResolvedValueOnce({ id: "c-1", status: "active" })
+        .mockResolvedValueOnce({ id: "participant-1" })
+        .mockResolvedValueOnce(null);
+      mockDB.update.mockResolvedValue({ id: "nom-1", cycle_id: "c-1", employee_id: 10, nominee_id: 20, status: "approved" });
+      mockDB.create.mockResolvedValue({ id: "review-1", status: "pending" });
+      const result = await approveNomination(ORG, "nom-1", PEER_ADMIN_ACTOR);
       expect(result.status).toBe("approved");
     });
   });
@@ -1275,26 +1305,26 @@ describe("peer-review.service", () => {
   describe("declineNomination", () => {
     it("should throw if not found", async () => {
       mockDB.findById.mockResolvedValue(null);
-      await expect(declineNomination(ORG, "x", 20)).rejects.toThrow("Peer nomination");
+      await expect(declineNomination(ORG, "x", PEER_ADMIN_ACTOR)).rejects.toThrow("Peer nomination");
     });
 
     it("should throw if cycle not in org", async () => {
       mockDB.findById.mockResolvedValue({ id: "nom-1", cycle_id: "c-1", status: "pending" });
       mockDB.findOne.mockResolvedValue(null);
-      await expect(declineNomination(ORG, "nom-1", 20)).rejects.toThrow("Review cycle");
+      await expect(declineNomination(ORG, "nom-1", PEER_ADMIN_ACTOR)).rejects.toThrow("Review cycle");
     });
 
     it("should throw if not pending", async () => {
       mockDB.findById.mockResolvedValue({ id: "nom-1", cycle_id: "c-1", status: "declined" });
-      mockDB.findOne.mockResolvedValue({ id: "c-1" });
-      await expect(declineNomination(ORG, "nom-1", 20)).rejects.toThrow("decline nomination");
+      mockDB.findOne.mockResolvedValue({ id: "c-1", status: "active" });
+      await expect(declineNomination(ORG, "nom-1", PEER_ADMIN_ACTOR)).rejects.toThrow("decline nomination");
     });
 
     it("should decline nomination", async () => {
       mockDB.findById.mockResolvedValue({ id: "nom-1", cycle_id: "c-1", status: "pending" });
-      mockDB.findOne.mockResolvedValue({ id: "c-1" });
+      mockDB.findOne.mockResolvedValue({ id: "c-1", status: "active" });
       mockDB.update.mockResolvedValue({ id: "nom-1", status: "declined" });
-      const result = await declineNomination(ORG, "nom-1", 20);
+      const result = await declineNomination(ORG, "nom-1", PEER_ADMIN_ACTOR);
       expect(result.status).toBe("declined");
     });
   });

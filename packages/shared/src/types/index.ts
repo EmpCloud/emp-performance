@@ -256,6 +256,16 @@ export interface Review {
   updated_at: string;
 }
 
+/**
+ * API-safe review representation. Peer reviewer identities are nullable so a
+ * review subject can receive released feedback without learning who authored
+ * it. Persistence models continue to use the non-null `Review.reviewer_id`.
+ */
+export type ReviewView = Omit<Review, "reviewer_id"> & {
+  reviewer_id: number | null;
+  reviewer_anonymous: boolean;
+};
+
 export interface ReviewCompetencyRating {
   id: string;
   review_id: string;

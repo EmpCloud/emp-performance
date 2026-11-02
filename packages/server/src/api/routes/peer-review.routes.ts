@@ -10,8 +10,6 @@ import { sendSuccess, sendPaginated } from "../../utils/response";
 import { ValidationError } from "../../utils/errors";
 import { nominatePeerSchema, submitPeerReviewSchema } from "@emp-performance/shared";
 
-const ADMIN_ROLES = ["hr_admin", "hr_manager", "org_admin", "super_admin"];
-
 const router = Router();
 router.use(authenticate);
 
@@ -32,7 +30,7 @@ router.post("/nominate", async (req: Request, res: Response, next: NextFunction)
       data.cycle_id,
       data.employee_id,
       data.nominee_id,
-      req.user!.empcloudUserId,
+      req.actor!,
     );
     sendSuccess(res, result, 201);
   } catch (err: any) {
@@ -49,13 +47,18 @@ router.get("/nominations", async (req: Request, res: Response, next: NextFunctio
     const orgId = req.user!.empcloudOrgId;
     const cycleId = req.query.cycleId as string;
     if (!cycleId) throw new ValidationError("cycleId query parameter is required");
-    const result = await peerReviewService.listNominations(orgId, cycleId, {
-      page: parseInt(req.query.page as string) || 1,
-      limit: parseInt((req.query.perPage as string) ?? (req.query.limit as string)) || 50,
-      employeeId: req.query.employeeId ? parseInt(req.query.employeeId as string) : undefined,
-      nomineeId: req.query.nomineeId ? parseInt(req.query.nomineeId as string) : undefined,
-      status: req.query.status as string | undefined,
-    });
+    const result = await peerReviewService.listNominations(
+      orgId,
+      cycleId,
+      req.actor!,
+      {
+        page: parseInt(req.query.page as string) || 1,
+        limit: parseInt((req.query.perPage as string) ?? (req.query.limit as string)) || 50,
+        employeeId: req.query.employeeId ? parseInt(req.query.employeeId as string) : undefined,
+        nomineeId: req.query.nomineeId ? parseInt(req.query.nomineeId as string) : undefined,
+        status: req.query.status as string | undefined,
+      },
+    );
     // Standardize on the paginated envelope used by every other list endpoint
     // so the client unwraps it the same way (#R10).
     sendPaginated(res, result.data, result.total, result.page, result.limit);
@@ -74,7 +77,7 @@ router.put(
       const result = await peerReviewService.approveNomination(
         orgId,
         req.params.id as string,
-        req.user!.empcloudUserId,
+        req.actor!,
       );
       sendSuccess(res, result);
     } catch (err) {
@@ -93,7 +96,7 @@ router.put(
       const result = await peerReviewService.declineNomination(
         orgId,
         req.params.id as string,
-        req.user!.empcloudUserId,
+        req.actor!,
       );
       sendSuccess(res, result);
     } catch (err) {
@@ -103,23 +106,27 @@ router.put(
 );
 
 // GET /peer-reviews/responses?cycleId=&reviewerEmployeeId=&status=
-// Lists submitted/draft peer-review responses for the org (HR/admin oversight or
-// a reviewer scoping to their own via reviewerEmployeeId).
+// Lists raw responses for HR/admin oversight; employee callers are always
+// forced to their own reviewer identity by the service.
 router.get("/responses", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const orgId = req.user!.empcloudOrgId;
-    const result = await peerReviewService.listResponses(orgId, {
-      page: parseInt(req.query.page as string) || 1,
-      limit: parseInt((req.query.perPage as string) ?? (req.query.limit as string)) || 50,
-      cycleId: req.query.cycleId as string | undefined,
-      reviewerEmployeeId: req.query.reviewerEmployeeId
-        ? parseInt(req.query.reviewerEmployeeId as string)
-        : undefined,
-      revieweeEmployeeId: req.query.revieweeEmployeeId
-        ? parseInt(req.query.revieweeEmployeeId as string)
-        : undefined,
-      status: req.query.status as string | undefined,
-    });
+    const result = await peerReviewService.listResponses(
+      orgId,
+      req.actor!,
+      {
+        page: parseInt(req.query.page as string) || 1,
+        limit: parseInt((req.query.perPage as string) ?? (req.query.limit as string)) || 50,
+        cycleId: req.query.cycleId as string | undefined,
+        reviewerEmployeeId: req.query.reviewerEmployeeId
+          ? parseInt(req.query.reviewerEmployeeId as string)
+          : undefined,
+        revieweeEmployeeId: req.query.revieweeEmployeeId
+          ? parseInt(req.query.revieweeEmployeeId as string)
+          : undefined,
+        status: req.query.status as string | undefined,
+      },
+    );
     sendPaginated(res, result.data, result.total, result.page, result.limit);
   } catch (err) {
     next(err);
@@ -130,12 +137,10 @@ router.get("/responses", async (req: Request, res: Response, next: NextFunction)
 router.get("/:id/response", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const orgId = req.user!.empcloudOrgId;
-    const isAdmin = ADMIN_ROLES.includes(req.user!.role);
     const result = await peerReviewService.getResponse(
       orgId,
       req.params.id as string,
-      req.user!.empcloudUserId,
-      isAdmin,
+      req.actor!,
     );
     sendSuccess(res, result);
   } catch (err) {
@@ -151,7 +156,7 @@ router.post("/:id/submit", async (req: Request, res: Response, next: NextFunctio
     const result = await peerReviewService.submitPeerReview(
       orgId,
       req.params.id as string,
-      req.user!.empcloudUserId,
+      req.actor!,
       data,
     );
     sendSuccess(res, result, 201);

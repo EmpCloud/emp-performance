@@ -68,6 +68,15 @@ export interface ReviewSummary {
   generated_at: string;
 }
 
+export interface ReviewSummaryOptions {
+  /**
+   * Employee-wide goals and continuous feedback are not part of an assigned
+   * peer reviewer's authorization scope. Callers may disable that context
+   * while retaining review-owned ratings and competency analysis.
+   */
+  includeEmployeeContext?: boolean;
+}
+
 export interface EmployeeSummary {
   employee_id: number;
   cycle_id: string;
@@ -139,6 +148,24 @@ function extractRows<T>(result: any): T[] {
 // ---------------------------------------------------------------------------
 
 const SUMMARY_MODEL = process.env.OPENAI_API_KEY ? "gpt-4o-mini" : "template";
+// Invalidate summaries generated before tenant-scoped competency resolution
+// and least-privilege peer projections were introduced.
+const SUMMARY_CACHE_VERSION = "v2";
+
+function versionedScopeKey(scopeKey: string): string {
+  return `${SUMMARY_CACHE_VERSION}:${scopeKey}`;
+}
+
+function reviewSummaryCacheKey(review: any, cycle: any): string {
+  // Both transitions that matter for confidentiality change one of these
+  // states: draft -> submitted and pre-release -> completed. Keeping the key
+  // below the schema's 64-character limit also avoids a cache migration.
+  return `${review.id}:${review.status ?? "unknown"}:${cycle?.status ?? "missing"}`;
+}
+
+function cycleSummaryCacheKey(subjectId: number, cycle: any): string {
+  return `${subjectId}:${cycle?.status ?? "missing"}`;
+}
 
 async function readSummaryCache<T>(
   orgId: number,
@@ -147,10 +174,11 @@ async function readSummaryCache<T>(
   cycleId: string,
 ): Promise<(T & { generated_at: string; model: string | null }) | null> {
   const db = getDB();
+  const cacheKey = versionedScopeKey(scopeKey);
   const row = await db.findOne<any>("ai_summary_cache", {
     organization_id: orgId,
     scope,
-    scope_key: scopeKey,
+    scope_key: cacheKey,
     cycle_id: cycleId,
   });
   if (!row) return null;
@@ -170,17 +198,18 @@ async function writeSummaryCache<T>(
   payload: T,
 ): Promise<void> {
   const db = getDB();
+  const cacheKey = versionedScopeKey(scopeKey);
   try {
     const existing = await db.findOne<any>("ai_summary_cache", {
       organization_id: orgId,
       scope,
-      scope_key: scopeKey,
+      scope_key: cacheKey,
       cycle_id: cycleId,
     });
     const data: Record<string, any> = {
       organization_id: orgId,
       scope,
-      scope_key: scopeKey,
+      scope_key: cacheKey,
       cycle_id: cycleId,
       model: SUMMARY_MODEL,
       payload: JSON.stringify(payload),
@@ -203,6 +232,7 @@ function buildRecommendedActions(
   weaknesses: CompetencyRatingDetail[],
   goalCompletionPct: number,
   constructiveFeedbackCount: number,
+  includeEmployeeContext = true,
 ): string[] {
   const actions: string[] = [];
 
@@ -212,24 +242,28 @@ function buildRecommendedActions(
     );
   }
 
-  if (goalCompletionPct < 50) {
+  if (includeEmployeeContext && goalCompletionPct < 50) {
     actions.push(
       `Goal completion is at ${goalCompletionPct}%. Review goal-setting process and provide additional support to achieve targets.`,
     );
-  } else if (goalCompletionPct < 80) {
+  } else if (includeEmployeeContext && goalCompletionPct < 80) {
     actions.push(
       `Goal completion is at ${goalCompletionPct}%. Close to target — focus on removing blockers for remaining goals.`,
     );
   }
 
-  if (constructiveFeedbackCount >= 3) {
+  if (includeEmployeeContext && constructiveFeedbackCount >= 3) {
     actions.push(
       `${constructiveFeedbackCount} constructive feedback items received. Schedule a coaching conversation to discuss improvement areas.`,
     );
   }
 
   if (actions.length === 0) {
-    actions.push("Continue current trajectory. Consider stretch goals or mentoring opportunities for further growth.");
+    actions.push(
+      includeEmployeeContext
+        ? "Continue current trajectory. Consider stretch goals or mentoring opportunities for further growth."
+        : "Continue current trajectory. Consider mentoring opportunities for further growth.",
+    );
   }
 
   return actions;
@@ -242,6 +276,7 @@ function buildNarrativeSummary(
   weaknesses: CompetencyRatingDetail[],
   positiveFeedbackCount: number,
   constructiveFeedbackCount: number,
+  includeEmployeeContext = true,
 ): string {
   const parts: string[] = [];
 
@@ -267,10 +302,15 @@ function buildNarrativeSummary(
   }
 
   // Goals
-  parts.push(`Goal completion stands at ${goalCompletionPct}%.`);
+  if (includeEmployeeContext) {
+    parts.push(`Goal completion stands at ${goalCompletionPct}%.`);
+  }
 
   // Feedback
-  if (positiveFeedbackCount > 0 || constructiveFeedbackCount > 0) {
+  if (
+    includeEmployeeContext &&
+    (positiveFeedbackCount > 0 || constructiveFeedbackCount > 0)
+  ) {
     parts.push(
       `Received ${positiveFeedbackCount} positive and ${constructiveFeedbackCount} constructive feedback items from peers.`,
     );
@@ -330,30 +370,59 @@ export async function generateReviewSummary(
   orgId: number,
   reviewId: string,
   regenerate = false,
+  options: ReviewSummaryOptions = {},
 ): Promise<ReviewSummary> {
   const db = getDB();
+  const includeEmployeeContext = options.includeEmployeeContext ?? true;
 
   // 1. Fetch the review
   const review = await db.findOne<any>("reviews", { id: reviewId, organization_id: orgId });
   if (!review) throw new NotFoundError("Review", reviewId);
 
-  // A8: serve cached summary unless regeneration was requested.
-  if (!regenerate) {
-    const cached = await readSummaryCache<ReviewSummary>(orgId, "review", reviewId, review.cycle_id);
+  // Resolve the cycle and framework inside the authenticated tenant before
+  // looking up any competency metadata. A corrupt cross-tenant framework
+  // reference therefore produces no competency details.
+  const cycle = await db.findOne<any>("review_cycles", {
+    id: review.cycle_id,
+    organization_id: orgId,
+  });
+  const framework = cycle?.framework_id
+    ? await db.findOne<any>("competency_frameworks", {
+        id: cycle.framework_id,
+        organization_id: orgId,
+        is_active: true,
+        deleted_at: null,
+      })
+    : null;
+
+  // Least-privilege peer summaries are never read from or written to the
+  // employee-context cache, preventing a full admin/subject payload from
+  // crossing authorization scopes.
+  if (includeEmployeeContext && !regenerate) {
+    const cached = await readSummaryCache<ReviewSummary>(
+      orgId,
+      "review",
+      reviewSummaryCacheKey(review, cycle),
+      review.cycle_id,
+    );
     if (cached) return cached;
   }
 
   // 2. Fetch competency ratings with competency names
-  const ratingsRaw = await db.raw<any>(
-    `SELECT rcr.competency_id, rcr.rating, rcr.comments,
-            c.name as competency_name, c.category
-     FROM review_competency_ratings rcr
-     INNER JOIN competencies c ON c.id = rcr.competency_id
-     WHERE rcr.review_id = ?
-     ORDER BY rcr.rating DESC`,
-    [reviewId],
-  );
-  const ratings: CompetencyRatingDetail[] = extractRows(ratingsRaw);
+  const ratings: CompetencyRatingDetail[] = framework
+    ? extractRows(await db.raw<any>(
+        `SELECT rcr.competency_id, rcr.rating, rcr.comments,
+                c.name as competency_name, c.category
+         FROM review_competency_ratings rcr
+         INNER JOIN competencies c
+           ON c.id = rcr.competency_id
+          AND c.framework_id = ?
+          AND c.deleted_at IS NULL
+         WHERE rcr.review_id = ?
+         ORDER BY rcr.rating DESC`,
+        [framework.id, reviewId],
+      ))
+    : [];
 
   const avgRating =
     ratings.length > 0 ? ratings.reduce((sum, r) => sum + r.rating, 0) / ratings.length : 0;
@@ -362,29 +431,36 @@ export async function generateReviewSummary(
   const weaknesses = ratings.filter((r) => r.rating < RATING_THRESHOLD);
 
   // 3. Fetch goals for this employee in this cycle
-  const cycle = await db.findOne<any>("review_cycles", { id: review.cycle_id });
-  const goalsRaw = await db.raw<any>(
-    `SELECT id, title, status, progress, category
-     FROM goals
-     WHERE organization_id = ? AND employee_id = ?
-       AND (cycle_id = ? OR (due_date >= ? AND due_date <= ?))
-     ORDER BY progress DESC`,
-    [orgId, review.employee_id, review.cycle_id, cycle?.start_date || "2000-01-01", cycle?.end_date || "2099-12-31"],
-  );
-  const goals: GoalSummaryItem[] = extractRows(goalsRaw);
+  const goals: GoalSummaryItem[] = includeEmployeeContext
+    ? extractRows(await db.raw<any>(
+        `SELECT id, title, status, progress, category
+         FROM goals
+         WHERE organization_id = ? AND employee_id = ?
+           AND (cycle_id = ? OR (due_date >= ? AND due_date <= ?))
+         ORDER BY progress DESC`,
+        [
+          orgId,
+          review.employee_id,
+          review.cycle_id,
+          cycle?.start_date || "2000-01-01",
+          cycle?.end_date || "2099-12-31",
+        ],
+      ))
+    : [];
   const completedGoals = goals.filter((g) => g.status === "completed");
   const inProgressGoals = goals.filter((g) => g.status === "in_progress");
   const goalCompletionPct = goals.length > 0 ? Math.round((completedGoals.length / goals.length) * 100) : 0;
   const avgProgress = goals.length > 0 ? Math.round(goals.reduce((s, g) => s + g.progress, 0) / goals.length) : 0;
 
   // 4. Fetch feedback for this employee
-  const feedbackRaw = await db.raw<any>(
-    `SELECT type, message FROM continuous_feedback
-     WHERE organization_id = ? AND to_user_id = ?
-     ORDER BY created_at DESC LIMIT 50`,
-    [orgId, review.employee_id],
-  );
-  const feedbackItems: { type: string; message: string }[] = extractRows(feedbackRaw);
+  const feedbackItems: { type: string; message: string }[] = includeEmployeeContext
+    ? extractRows(await db.raw<any>(
+        `SELECT type, message FROM continuous_feedback
+         WHERE organization_id = ? AND to_user_id = ?
+         ORDER BY created_at DESC LIMIT 50`,
+        [orgId, review.employee_id],
+      ))
+    : [];
 
   const buildTheme = (type: string): FeedbackTheme => {
     const items = feedbackItems.filter((f) => f.type === type);
@@ -400,7 +476,12 @@ export async function generateReviewSummary(
   const generalTheme = buildTheme("general");
 
   // 5. Build recommended actions
-  const recommendedActions = buildRecommendedActions(weaknesses, goalCompletionPct, constructiveTheme.count);
+  const recommendedActions = buildRecommendedActions(
+    weaknesses,
+    goalCompletionPct,
+    constructiveTheme.count,
+    includeEmployeeContext,
+  );
 
   // 6. Build narrative
   let narrative = buildNarrativeSummary(
@@ -410,17 +491,21 @@ export async function generateReviewSummary(
     weaknesses,
     positiveTheme.count,
     constructiveTheme.count,
+    includeEmployeeContext,
   );
 
   // 7. Optionally enhance with OpenAI
+  const employeeContextPrompt = includeEmployeeContext
+    ? `\n- Goal completion: ${goalCompletionPct}% (${completedGoals.length}/${goals.length} goals)` +
+      `\n- Positive feedback count: ${positiveTheme.count}` +
+      `\n- Constructive feedback count: ${constructiveTheme.count}`
+    : "";
   const aiNarrative = await tryOpenAISummary(
     `Generate a performance review summary for an employee with:\n` +
       `- Average competency rating: ${avgRating.toFixed(1)}/5\n` +
       `- Strengths: ${strengths.map((s) => s.competency_name).join(", ") || "none identified"}\n` +
-      `- Weaknesses: ${weaknesses.map((w) => w.competency_name).join(", ") || "none identified"}\n` +
-      `- Goal completion: ${goalCompletionPct}% (${completedGoals.length}/${goals.length} goals)\n` +
-      `- Positive feedback count: ${positiveTheme.count}\n` +
-      `- Constructive feedback count: ${constructiveTheme.count}`,
+      `- Weaknesses: ${weaknesses.map((w) => w.competency_name).join(", ") || "none identified"}` +
+      employeeContextPrompt,
   );
   if (aiNarrative) narrative = aiNarrative;
 
@@ -456,7 +541,15 @@ export async function generateReviewSummary(
     generated_at: new Date().toISOString(),
   };
 
-  await writeSummaryCache(orgId, "review", reviewId, review.cycle_id, summary);
+  if (includeEmployeeContext) {
+    await writeSummaryCache(
+      orgId,
+      "review",
+      reviewSummaryCacheKey(review, cycle),
+      review.cycle_id,
+      summary,
+    );
+  }
   return summary;
 }
 
@@ -475,10 +568,23 @@ export async function generateEmployeeSummary(
   // Verify cycle exists
   const cycle = await db.findOne<any>("review_cycles", { id: cycleId, organization_id: orgId });
   if (!cycle) throw new NotFoundError("ReviewCycle", cycleId);
+  const framework = cycle.framework_id
+    ? await db.findOne<any>("competency_frameworks", {
+        id: cycle.framework_id,
+        organization_id: orgId,
+        is_active: true,
+        deleted_at: null,
+      })
+    : null;
 
   // A8: serve cached summary unless regeneration was requested.
   if (!regenerate) {
-    const cached = await readSummaryCache<EmployeeSummary>(orgId, "employee", String(userId), cycleId);
+    const cached = await readSummaryCache<EmployeeSummary>(
+      orgId,
+      "employee",
+      cycleSummaryCacheKey(userId, cycle),
+      cycleId,
+    );
     if (cached) return cached;
   }
 
@@ -512,17 +618,21 @@ export async function generateEmployeeSummary(
       : null;
 
   // Aggregate competency ratings across all reviews
-  const allCompRatingsRaw = await db.raw<any>(
-    `SELECT c.name, AVG(rcr.rating) as avg_rating
-     FROM review_competency_ratings rcr
-     INNER JOIN reviews r ON r.id = rcr.review_id
-     INNER JOIN competencies c ON c.id = rcr.competency_id
-     WHERE r.organization_id = ? AND r.employee_id = ? AND r.cycle_id = ? AND r.status = 'submitted'
-     GROUP BY c.id, c.name
-     ORDER BY avg_rating DESC`,
-    [orgId, userId, cycleId],
-  );
-  const allCompRatings: { name: string; avg_rating: number }[] = extractRows(allCompRatingsRaw);
+  const allCompRatings: { name: string; avg_rating: number }[] = framework
+    ? extractRows(await db.raw<any>(
+        `SELECT c.name, AVG(rcr.rating) as avg_rating
+         FROM review_competency_ratings rcr
+         INNER JOIN reviews r ON r.id = rcr.review_id
+         INNER JOIN competencies c
+           ON c.id = rcr.competency_id
+          AND c.framework_id = ?
+          AND c.deleted_at IS NULL
+         WHERE r.organization_id = ? AND r.employee_id = ? AND r.cycle_id = ? AND r.status = 'submitted'
+         GROUP BY c.id, c.name
+         ORDER BY avg_rating DESC`,
+        [framework.id, orgId, userId, cycleId],
+      ))
+    : [];
 
   const overallCompAvg =
     allCompRatings.length > 0
@@ -631,7 +741,13 @@ export async function generateEmployeeSummary(
     generated_at: new Date().toISOString(),
   };
 
-  await writeSummaryCache(orgId, "employee", String(userId), cycleId, summary);
+  await writeSummaryCache(
+    orgId,
+    "employee",
+    cycleSummaryCacheKey(userId, cycle),
+    cycleId,
+    summary,
+  );
   return summary;
 }
 
@@ -653,7 +769,12 @@ export async function generateTeamSummary(
 
   // A8: serve cached summary unless regeneration was requested.
   if (!regenerate) {
-    const cached = await readSummaryCache<TeamSummary>(orgId, "team", String(managerId), cycleId);
+    const cached = await readSummaryCache<TeamSummary>(
+      orgId,
+      "team",
+      cycleSummaryCacheKey(managerId, cycle),
+      cycleId,
+    );
     if (cached) return cached;
   }
 
@@ -790,6 +911,12 @@ export async function generateTeamSummary(
     generated_at: new Date().toISOString(),
   };
 
-  await writeSummaryCache(orgId, "team", String(managerId), cycleId, summary);
+  await writeSummaryCache(
+    orgId,
+    "team",
+    cycleSummaryCacheKey(managerId, cycle),
+    cycleId,
+    summary,
+  );
   return summary;
 }

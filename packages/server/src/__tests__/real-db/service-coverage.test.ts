@@ -226,7 +226,7 @@ describe("OneOnOneService", () => {
 
 // -- Peer Review Service
 describe("PeerReviewService", () => {
-  it("listNominations invokes service", async () => { await tryCall(() => peerReviewService.listNominations(ORG_ID)); expect(true).toBe(true); });
+  it("listNominations invokes service", async () => { await tryCall(() => peerReviewService.listNominations(ORG_ID, "non-existent", REVIEW_ADMIN_ACTOR)); expect(true).toBe(true); });
 });
 
 // -- Goal Service
@@ -266,7 +266,7 @@ describe("ReviewCycleService", () => {
 
 // -- Review Service
 describe("ReviewService", () => {
-  it("listReviews invokes service", async () => { await tryCall(() => reviewService.listReviews(ORG_ID, { page: 1, perPage: 10 } as any)); expect(true).toBe(true); });
+  it("listReviews invokes service", async () => { await tryCall(() => reviewService.listReviews(ORG_ID, { page: 1, perPage: 10 } as any, REVIEW_ADMIN_ACTOR)); expect(true).toBe(true); });
 });
 
 // -- Analytics Service

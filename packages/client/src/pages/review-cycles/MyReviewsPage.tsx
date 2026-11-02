@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { Star, Clock, CheckCircle, FileText, PenLine } from "lucide-react";
 import { apiGet } from "@/api/client";
 import { getUser } from "@/lib/auth-store";
-import type { Review, PaginatedResponse } from "@emp-performance/shared";
+import type { ReviewView, PaginatedResponse } from "@emp-performance/shared";
 import { formatDate } from "@/lib/utils";
 import { StatusBadge } from "@/components/StatusBadge";
 
@@ -47,7 +47,7 @@ export function MyReviewsPage() {
   const { data: toCompleteData, isLoading: loadingToComplete, error: toCompleteError } = useQuery({
     queryKey: ["my-reviews-to-complete", userId],
     queryFn: () =>
-      apiGet<PaginatedResponse<Review>>("/reviews", {
+      apiGet<PaginatedResponse<ReviewView>>("/reviews", {
         reviewer_id: userId,
         perPage: 50,
       }),
@@ -59,7 +59,7 @@ export function MyReviewsPage() {
   const { data: aboutMeData, isLoading: loadingAboutMe, error: aboutMeError } = useQuery({
     queryKey: ["my-reviews-about-me", userId],
     queryFn: () =>
-      apiGet<PaginatedResponse<Review>>("/reviews", {
+      apiGet<PaginatedResponse<ReviewView>>("/reviews", {
         employee_id: userId,
         perPage: 50,
       }),
@@ -185,7 +185,9 @@ export function MyReviewsPage() {
                         {typeLabel(review.type)}
                       </span>
                       <span className="text-xs text-gray-400">
-                        {t("myReviews.byReviewer", { id: review.reviewer_id })}
+                        {review.reviewer_anonymous
+                          ? t("myReviews.anonymousPeer")
+                          : t("myReviews.byReviewer", { id: review.reviewer_id })}
                       </span>
                     </div>
                     <p className="mt-0.5 text-xs text-gray-500">

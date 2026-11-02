@@ -3,13 +3,13 @@ import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Star, User, Users, FileText } from "lucide-react";
 import { apiGet } from "@/api/client";
-import type { Review, ReviewCompetencyRating } from "@emp-performance/shared";
+import type { ReviewView, ReviewCompetencyRating } from "@emp-performance/shared";
 import { formatDate } from "@/lib/utils";
 import { AiSummaryPanel } from "@/components/AiSummaryPanel";
 import { StatusBadge } from "@/components/StatusBadge";
 
 type RatingWithName = ReviewCompetencyRating & { competency_name?: string | null };
-type ReviewWithRatings = Review & { competency_ratings: RatingWithName[] };
+type ReviewWithRatings = ReviewView & { competency_ratings: RatingWithName[] };
 
 const TYPE_COLORS: Record<string, string> = {
   self: "bg-blue-100 text-blue-700",
@@ -57,7 +57,7 @@ export function ReviewPage() {
   const { data: siblingData } = useQuery({
     queryKey: ["reviews-for-employee", review?.cycle_id, review?.employee_id],
     queryFn: () =>
-      apiGet<{ data: Review[] }>("/reviews", {
+      apiGet<{ data: ReviewView[] }>("/reviews", {
         cycle_id: review!.cycle_id,
         employee_id: review!.employee_id,
         perPage: 50,
@@ -150,7 +150,11 @@ export function ReviewPage() {
 
               {/* Reviewer info */}
               <div className="text-sm text-gray-500">
-                <p>{t("review.reviewerLabel", { id: rev.reviewer_id })}</p>
+                <p>
+                  {rev.reviewer_anonymous
+                    ? t("review.anonymousPeer")
+                    : t("review.reviewerLabel", { id: rev.reviewer_id })}
+                </p>
                 {rev.submitted_at && (
                   <p>{t("review.submittedLabel", { date: formatDate(rev.submitted_at) })}</p>
                 )}

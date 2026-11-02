@@ -27,36 +27,129 @@ const review: ReviewPolicyResource = {
   organizationId: 1,
   employeeId: 10,
   reviewerId: 20,
+  type: "manager",
+  reviewStatus: "draft",
+  cycleStatus: "active",
 };
+
+const REVIEW_TYPES = ["manager", "peer"] as const;
+const REVIEW_STATUSES = ["pending", "draft", "submitted"] as const;
+const NON_RELEASED_CYCLE_STATUSES = [
+  "draft",
+  "active",
+  "in_review",
+  "calibration",
+  "cancelled",
+] as const;
+
+const SUBJECT_UNRELEASED_CASES = REVIEW_TYPES.flatMap((type) =>
+  REVIEW_STATUSES.flatMap((reviewStatus) =>
+    NON_RELEASED_CYCLE_STATUSES.map(
+      (cycleStatus) => [type, reviewStatus, cycleStatus] as const,
+    ),
+  ),
+);
 
 describe("review authorization policy", () => {
   describe("read", () => {
-    it("allows the review subject", () => {
-      expect(canAccessReview(actor("employee"), "read", review)).toBe(true);
-    });
-
-    it("allows the assigned reviewer", () => {
-      expect(
-        canAccessReview(actor("employee", { userId: 20, employeeId: 20 }), "read", review),
-      ).toBe(true);
-    });
-
     it.each(["super_admin", "org_admin", "hr_admin", "hr_manager"] as const)(
-      "allows same-tenant %s",
+      "allows same-tenant %s to read an unreleased review",
       (role) => {
         expect(canAccessReview(actor(role, { userId: 99, employeeId: 99 }), "read", review)).toBe(true);
       },
     );
 
-    it("denies an unrelated same-tenant employee", () => {
+    it.each(REVIEW_STATUSES)(
+      "allows the assigned reviewer to read a %s review",
+      (reviewStatus) => {
+        expect(
+          canAccessReview(
+            actor("employee", { userId: 20, employeeId: 20 }),
+            "read",
+            { ...review, reviewStatus, cycleStatus: "cancelled" },
+          ),
+        ).toBe(true);
+      },
+    );
+
+    it("allows an employee to read their own self-review draft", () => {
+      const selfReview: ReviewPolicyResource = {
+        ...review,
+        employeeId: 10,
+        reviewerId: 10,
+        type: "self",
+        reviewStatus: "draft",
+        cycleStatus: "active",
+      };
+
+      expect(canAccessReview(actor("employee"), "read", selfReview)).toBe(true);
+    });
+
+    it.each(SUBJECT_UNRELEASED_CASES)(
+      "denies the subject a %s review with review status %s while cycle is %s",
+      (type, reviewStatus, cycleStatus) => {
+        expect(
+          canAccessReview(actor("employee"), "read", {
+            ...review,
+            type,
+            reviewStatus,
+            cycleStatus,
+          }),
+        ).toBe(false);
+      },
+    );
+
+    it.each(REVIEW_TYPES)(
+      "denies the subject an unsubmitted completed-cycle %s review",
+      (type) => {
+        for (const reviewStatus of ["pending", "draft"] as const) {
+          expect(
+            canAccessReview(actor("employee"), "read", {
+              ...review,
+              type,
+              reviewStatus,
+              cycleStatus: "completed",
+            }),
+          ).toBe(false);
+        }
+      },
+    );
+
+    it.each(REVIEW_TYPES)(
+      "allows the subject a submitted and completed %s review",
+      (type) => {
+        expect(
+          canAccessReview(actor("employee"), "read", {
+            ...review,
+            type,
+            reviewStatus: "submitted",
+            cycleStatus: "completed",
+          }),
+        ).toBe(true);
+      },
+    );
+
+    it("denies an unrelated same-tenant employee even after release", () => {
       expect(
-        canAccessReview(actor("employee", { userId: 99, employeeId: 99 }), "read", review),
+        canAccessReview(
+          actor("employee", { userId: 99, employeeId: 99 }),
+          "read",
+          { ...review, reviewStatus: "submitted", cycleStatus: "completed" },
+        ),
       ).toBe(false);
     });
 
-    it("denies a cross-tenant administrator", () => {
+    it.each([
+      ["administrator", actor("org_admin", { userId: 99, employeeId: 99, organizationId: 2 })],
+      ["assigned reviewer", actor("employee", { userId: 20, employeeId: 20, organizationId: 2 })],
+      ["review subject", actor("employee", { organizationId: 2 })],
+    ] as const)("denies a cross-tenant %s", (_label, crossTenantActor) => {
       expect(
-        canAccessReview(actor("org_admin", { organizationId: 2 }), "read", review),
+        canAccessReview(crossTenantActor, "read", {
+          ...review,
+          reviewStatus: "submitted",
+          cycleStatus: "completed",
+        }),
       ).toBe(false);
     });
   });
