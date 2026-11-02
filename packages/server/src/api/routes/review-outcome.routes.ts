@@ -1,15 +1,20 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import {
   acknowledgeReviewOutcomeSchema,
+  approveReviewOutcomeCorrectionSchema,
   idParamSchema,
   paginationSchema,
+  proposeReviewOutcomeCorrectionSchema,
+  rejectReviewOutcomeCorrectionSchema,
   resolveReviewOutcomeAppealSchema,
   reviewOutcomeAppealListQuerySchema,
+  reviewOutcomeRevisionParamSchema,
   submitReviewOutcomeAppealSchema,
 } from "@emp-performance/shared";
 import { authenticate, authorize } from "../middleware/auth.middleware";
 import { sendPaginated, sendSuccess } from "../../utils/response";
 import * as outcomeService from "../../services/review/review-outcome.service";
+import * as correctionService from "../../services/review/review-outcome-correction.service";
 
 const router = Router();
 const APPEAL_GOVERNANCE_ROLES = ["super_admin", "org_admin", "hr_admin"] as const;
@@ -170,12 +175,93 @@ export async function resolveReviewOutcomeAppeal(
   }
 }
 
+export async function listReviewOutcomeRevisions(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const { id } = idParamSchema.parse(req.params);
+    const revisions = await correctionService.listOutcomeRevisions(
+      req.user!.empcloudOrgId,
+      id,
+      req.actor!,
+    );
+    return sendSuccess(res, revisions);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function proposeReviewOutcomeCorrection(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const { id } = idParamSchema.parse(req.params);
+    const input = proposeReviewOutcomeCorrectionSchema.parse(req.body ?? {});
+    const revision = await correctionService.proposeOutcomeCorrection(
+      req.user!.empcloudOrgId,
+      id,
+      req.actor!,
+      input,
+    );
+    return sendSuccess(res, revision, 201);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function approveReviewOutcomeCorrection(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const { id, revisionId } = reviewOutcomeRevisionParamSchema.parse(req.params);
+    const input = approveReviewOutcomeCorrectionSchema.parse(req.body ?? {});
+    const revision = await correctionService.approveOutcomeCorrection(
+      req.user!.empcloudOrgId,
+      id,
+      revisionId,
+      req.actor!,
+      input,
+    );
+    return sendSuccess(res, revision);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function rejectReviewOutcomeCorrection(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const { id, revisionId } = reviewOutcomeRevisionParamSchema.parse(req.params);
+    const input = rejectReviewOutcomeCorrectionSchema.parse(req.body ?? {});
+    const revision = await correctionService.rejectOutcomeCorrection(
+      req.user!.empcloudOrgId,
+      id,
+      revisionId,
+      req.actor!,
+      input,
+    );
+    return sendSuccess(res, revision);
+  } catch (error) {
+    next(error);
+  }
+}
+
 router.get("/mine", listMyReviewOutcomes);
 router.get(
   "/appeals",
   authorize(...APPEAL_GOVERNANCE_ROLES),
   listReviewOutcomeAppeals,
 );
+router.get("/:id/revisions", listReviewOutcomeRevisions);
 router.get("/:id", getReviewOutcome);
 router.post("/:id/acknowledge", acknowledgeReviewOutcome);
 router.post("/:id/appeals", submitReviewOutcomeAppeal);
@@ -189,6 +275,21 @@ router.post(
   "/:id/appeals/resolve",
   authorize(...APPEAL_GOVERNANCE_ROLES),
   resolveReviewOutcomeAppeal,
+);
+router.post(
+  "/:id/corrections",
+  authorize(...APPEAL_GOVERNANCE_ROLES),
+  proposeReviewOutcomeCorrection,
+);
+router.post(
+  "/:id/corrections/:revisionId/approve",
+  authorize(...APPEAL_GOVERNANCE_ROLES),
+  approveReviewOutcomeCorrection,
+);
+router.post(
+  "/:id/corrections/:revisionId/reject",
+  authorize(...APPEAL_GOVERNANCE_ROLES),
+  rejectReviewOutcomeCorrection,
 );
 
 export { router as reviewOutcomeRoutes };

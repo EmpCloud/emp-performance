@@ -20,8 +20,12 @@
     "build:client": "pnpm --filter @emp-performance/client build",
     "test": "pnpm -r run test",
     "test:server": "pnpm --filter @emp-performance/server test",
+    "test:all": "pnpm --filter @emp-performance/server test:all",
+    "test:ci": "pnpm --filter @emp-performance/server test:ci",
     "lint": "pnpm -r run lint",
+    "smoke": "node scripts/smoke-check.mjs",
     "db:migrate": "pnpm --filter @emp-performance/server db:migrate",
+    "db:migrate:prod": "pnpm --filter @emp-performance/server db:migrate:prod",
     "db:seed": "pnpm --filter @emp-performance/server db:seed",
     "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist"
   },
@@ -32,5 +36,12 @@
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=9.0.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "lodash": "^4.18.0",
+      "path-to-regexp": "^8.4.0",
+      "uuid": "^11.1.1"
+    }
   }
 }

@@ -3,13 +3,14 @@ import { Request, Response, NextFunction } from "express";
 // Simple in-memory rate limiter (no Redis dependency required)
 const store = new Map<string, { count: number; resetAt: number }>();
 
-// Clean up expired entries every 5 minutes
-setInterval(() => {
+// Clean up expired entries every 5 minutes without keeping the process alive.
+const cleanupTimer = setInterval(() => {
   const now = Date.now();
   for (const [key, val] of store) {
     if (val.resetAt < now) store.delete(key);
   }
 }, 5 * 60 * 1000);
+cleanupTimer.unref();
 
 interface RateLimitOptions {
   windowMs: number;
@@ -30,6 +31,7 @@ export function rateLimit(options: RateLimitOptions) {
       store.set(key, { count: 1, resetAt: now + windowMs });
       res.setHeader("X-RateLimit-Limit", max);
       res.setHeader("X-RateLimit-Remaining", max - 1);
+      res.setHeader("X-RateLimit-Reset", Math.ceil((now + windowMs) / 1000));
       return next();
     }
 
@@ -40,6 +42,7 @@ export function rateLimit(options: RateLimitOptions) {
     res.setHeader("X-RateLimit-Reset", Math.ceil(record.resetAt / 1000));
 
     if (record.count > max) {
+      res.setHeader("Retry-After", Math.max(1, Math.ceil((record.resetAt - now) / 1000)));
       return res.status(429).json({
         success: false,
         error: {

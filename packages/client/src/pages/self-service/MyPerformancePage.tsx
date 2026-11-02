@@ -258,6 +258,11 @@ function ReleasedOutcomesSection({
         <ul className="mt-5 grid gap-3 lg:grid-cols-3">
           {outcomes.map((outcome) => {
             const appealOpen = new Date(outcome.appeal_deadline_at).getTime() >= Date.now();
+            const originalRating = Number(outcome.released_rating);
+            const effectiveRating = Number(
+              outcome.effective_rating ?? outcome.released_rating,
+            );
+            const ratingWasCorrected = originalRating !== effectiveRating;
             return (
               <li key={outcome.id}>
                 <Link
@@ -273,10 +278,24 @@ function ReleasedOutcomesSection({
                         {t("reviewOutcome.releasedOnShort", { date: formatDate(outcome.released_at) })}
                       </p>
                     </div>
-                    <span className="rounded-lg bg-brand-50 px-2.5 py-1 text-lg font-bold text-brand-700">
-                      {Number(outcome.released_rating).toFixed(2).replace(/\.00$/, "")}
-                      <span className="text-xs font-medium text-gray-500">/5</span>
-                    </span>
+                    <div className="shrink-0 text-right">
+                      <span
+                        className="inline-block rounded-lg bg-brand-50 px-2.5 py-1 text-lg font-bold text-brand-700"
+                        aria-label={t("reviewOutcome.effectiveRatingAria", {
+                          rating: effectiveRating.toFixed(2),
+                        })}
+                      >
+                        {effectiveRating.toFixed(2).replace(/\.00$/, "")}
+                        <span className="text-xs font-medium text-gray-500">/5</span>
+                      </span>
+                      {ratingWasCorrected && (
+                        <p className="mt-1 text-xs text-gray-500">
+                          {t("reviewOutcome.originalRatingShort", {
+                            rating: originalRating.toFixed(2).replace(/\.00$/, ""),
+                          })}
+                        </p>
+                      )}
+                    </div>
                   </div>
                   <div className="mt-auto flex items-end justify-between gap-3 pt-4">
                     <div className="flex items-center gap-1.5 text-xs text-gray-500">

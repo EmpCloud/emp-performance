@@ -32,7 +32,7 @@ function SSOGate({ children }: { children: React.ReactNode }) {
       try {
         const res = await apiPost<{
           user: any;
-          tokens: { accessToken: string; refreshToken: string };
+          tokens: { accessToken: string };
         }>("/auth/sso", { token: ssoToken });
 
         if (cancelled) return;

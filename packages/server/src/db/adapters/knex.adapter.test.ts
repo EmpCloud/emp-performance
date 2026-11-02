@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { KnexAdapter } from "./knex.adapter";
+import path from "node:path";
+import { CanonicalMigrationSource, KnexAdapter } from "./knex.adapter";
 
 type Call = { executor: "root" | "transaction"; operation: string; value?: unknown };
 
@@ -114,5 +115,26 @@ describe("KnexAdapter transaction context", () => {
 
     expect(transactionExecutor.commit).toHaveBeenCalledOnce();
     expect(transactionExecutor.rollback).not.toHaveBeenCalled();
+  });
+});
+
+describe("CanonicalMigrationSource", () => {
+  it("reports stable TypeScript ledger names when loading source migrations", async () => {
+    const source = new CanonicalMigrationSource(
+      path.resolve(__dirname, "../migrations/sql"),
+      "ts"
+    );
+
+    const migrations = await source.getMigrations([".ts"]);
+    const names = migrations.map((migration) => source.getMigrationName(migration));
+
+    expect(names.length).toBeGreaterThan(0);
+    expect(names[0]).toBe("001_initial_schema.ts");
+    expect(names.every((name) => name.endsWith(".ts"))).toBe(true);
+    expect(names).toEqual([...names].sort());
+
+    const firstMigration = await source.getMigration(migrations[0]);
+    expect(firstMigration.up).toBeTypeOf("function");
+    expect(firstMigration.down).toBeTypeOf("function");
   });
 });

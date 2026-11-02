@@ -5,6 +5,7 @@ import type {
   ReviewOutcome,
   ReviewOutcomeAppealStatus,
   ReviewOutcomeDetail,
+  ReviewOutcomeRevision,
   ReviewOutcomeView,
 } from "@emp-performance/shared";
 import { getDB } from "../../db/adapters";
@@ -79,16 +80,25 @@ async function hydrateOutcome(
   orgId: number,
   outcome: ReviewOutcome,
 ): Promise<ReviewOutcomeView> {
-  const [cycle, employee] = await Promise.all([
+  const [cycle, employee, currentRevision] = await Promise.all([
     db.findOne<ReviewCycle>("review_cycles", {
       id: outcome.cycle_id,
       organization_id: orgId,
     }),
     findUserById(outcome.employee_id).catch(() => null),
+    outcome.current_revision_id
+      ? db.findOne<ReviewOutcomeRevision>("review_outcome_revisions", {
+          id: outcome.current_revision_id,
+          organization_id: orgId,
+          outcome_id: outcome.id,
+          status: "applied",
+        })
+      : Promise.resolve(null),
   ]);
 
   return {
     ...normalizeOutcome(outcome),
+    effective_rating: Number(currentRevision?.rating ?? outcome.released_rating),
     cycle_name: cycle?.name ?? null,
     cycle_start_date: cycle?.start_date ?? null,
     cycle_end_date: cycle?.end_date ?? null,
@@ -200,30 +210,72 @@ export async function createReviewOutcomesForRelease(
   }
 
   const appealDeadline = new Date(releasedAt.getTime() + APPEAL_WINDOW_MS);
-  const records = ratings.map((rating) => ({
-    id: uuidv4(),
-    organization_id: orgId,
-    cycle_id: cycleId,
-    participant_id: rating.participant_id,
-    employee_id: rating.employee_id,
-    released_rating: Number(rating.released_rating),
-    released_at: releasedAt,
-    appeal_deadline_at: appealDeadline,
-    acknowledged_at: null,
-    acknowledged_by: null,
-    acknowledgement_note: null,
-    appeal_status: null,
-    appeal_reason: null,
-    appeal_submitted_at: null,
-    appeal_submitted_by: null,
-    appeal_review_started_at: null,
-    appeal_review_started_by: null,
-    appeal_resolved_at: null,
-    appeal_resolved_by: null,
-    appeal_resolution_note: null,
-  }));
+  const records = ratings.map((rating) => {
+    const id = uuidv4();
+    const currentRevisionId = uuidv4();
+    return {
+      id,
+      organization_id: orgId,
+      cycle_id: cycleId,
+      participant_id: rating.participant_id,
+      employee_id: rating.employee_id,
+      released_rating: Number(rating.released_rating),
+      // Insert the outcome before its initial revision to satisfy the revision's
+      // outcome FK, then advance this pointer after the revision exists.
+      current_revision_id: null,
+      released_at: releasedAt,
+      appeal_deadline_at: appealDeadline,
+      acknowledged_at: null,
+      acknowledged_by: null,
+      acknowledgement_note: null,
+      appeal_status: null,
+      appeal_reason: null,
+      appeal_submitted_at: null,
+      appeal_submitted_by: null,
+      appeal_review_started_at: null,
+      appeal_review_started_by: null,
+      appeal_resolved_at: null,
+      appeal_resolved_by: null,
+      appeal_resolution_note: null,
+      _initial_revision: {
+        id: currentRevisionId,
+        organization_id: orgId,
+        outcome_id: id,
+        version: 1,
+        rating: Number(rating.released_rating),
+        source: "release",
+        status: "applied",
+        reason: null,
+        proposed_by: null,
+        proposed_at: releasedAt,
+        reviewed_by: null,
+        reviewed_at: releasedAt,
+        review_note: null,
+        supersedes_revision_id: null,
+      },
+    };
+  });
 
-  return db.createMany<ReviewOutcome>("review_outcomes", records as any);
+  const outcomes = await db.createMany<ReviewOutcome>(
+    "review_outcomes",
+    records.map(({ _initial_revision: _revision, ...outcome }) => outcome) as any,
+  );
+  await db.createMany<ReviewOutcomeRevision>(
+    "review_outcome_revisions",
+    records.map((record) => record._initial_revision) as any,
+  );
+  for (const record of records) {
+    await db.update<ReviewOutcome>("review_outcomes", record.id, {
+      current_revision_id: record._initial_revision.id,
+    });
+  }
+  const revisionIdByOutcome = new Map(
+    records.map((record) => [record.id, record._initial_revision.id]),
+  );
+  return outcomes.map((outcome) => ({
+    ...outcome,
+    current_revision_id: revisionIdByOutcome.get(outcome.id)!,
+  }));
 }
 
 export async function listMyReviewOutcomes(

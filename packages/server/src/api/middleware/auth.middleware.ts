@@ -133,8 +133,14 @@ async function authenticateApiKey(rawKey: string, req: Request, next: NextFuncti
     if (!ecUser || ecUser.status !== 1) {
       return next(new AppError(401, "INVALID_API_KEY", "API key owner not found or inactive"));
     }
+    if (Number(key.organization_id) !== Number(ecUser.organization_id)) {
+      return next(new AppError(401, "INVALID_API_KEY", "API key tenant binding is invalid"));
+    }
 
     const ecOrg = await findOrgById(ecUser.organization_id);
+    if (!ecOrg || !ecOrg.is_active) {
+      return next(new AppError(401, "INVALID_API_KEY", "API key organization not found or inactive"));
+    }
 
     req.user = {
       empcloudUserId: ecUser.id,
@@ -144,7 +150,7 @@ async function authenticateApiKey(rawKey: string, req: Request, next: NextFuncti
       email: ecUser.email,
       firstName: ecUser.first_name,
       lastName: ecUser.last_name,
-      orgName: ecOrg?.name ?? "",
+      orgName: ecOrg.name,
     };
     req.actor = actorFromAuthPayload(req.user, "api_key");
     next();

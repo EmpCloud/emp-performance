@@ -5,10 +5,37 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-and-test:
+  verify:
+    name: Build, migrate, and test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NODE_ENV: test
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: secret
+      DB_NAME: emp_performance
+      EMPCLOUD_DB_HOST: 127.0.0.1
+      EMPCLOUD_DB_PORT: 3306
+      EMPCLOUD_DB_USER: root
+      EMPCLOUD_DB_PASSWORD: secret
+      EMPCLOUD_DB_NAME: empcloud
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: 6379
+      JWT_SECRET: ci-only-secret-with-at-least-32-characters
+      CORS_ORIGIN: http://localhost:5177
+      APP_URL: http://localhost:5177
 
     services:
       mysql:
@@ -16,43 +43,88 @@ jobs:
         env:
           MYSQL_ROOT_PASSWORD: secret
           MYSQL_DATABASE: emp_performance
-        ports: ['3306:3306']
-        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=5
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
       redis:
         image: redis:7-alpine
-        ports: ['6379:6379']
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v2
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
         with:
           version: 9
-      - uses: actions/setup-node@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
-      - run: pnpm install
-      - name: Create databases
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level high
+
+      - name: Create test databases
         run: |
           mysql -h 127.0.0.1 -u root -psecret -e "CREATE DATABASE IF NOT EXISTS empcloud;"
           mysql -h 127.0.0.1 -u root -psecret -e "CREATE DATABASE IF NOT EXISTS emp_performance;"
+
       - name: Build
-        continue-on-error: true
         run: pnpm build
+
+      - name: Verify database migrations
+        run: pnpm db:migrate:prod
+
       - name: Run tests
-        continue-on-error: true
-        env:
-          DB_HOST: 127.0.0.1
-          DB_PORT: 3306
-          DB_USER: root
-          DB_PASSWORD: secret
-          DB_NAME: emp_performance
-          EMPCLOUD_DB_HOST: 127.0.0.1
-          EMPCLOUD_DB_PORT: 3306
-          EMPCLOUD_DB_USER: root
-          EMPCLOUD_DB_PASSWORD: secret
-          EMPCLOUD_DB_NAME: empcloud
-          REDIS_HOST: 127.0.0.1
-          NODE_ENV: test
-          JWT_SECRET: test-secret
-        run: pnpm test
+        run: pnpm test:ci
+
+      - name: Verify local readiness
+        shell: bash
+        run: |
+          pnpm --filter @emp-performance/server start > /tmp/emp-performance.log 2>&1 &
+          server_pid=$!
+          trap 'kill "${server_pid}" 2>/dev/null || true' EXIT
+          if ! node scripts/smoke-check.mjs --base-url http://127.0.0.1:4300 --path /health/ready --timeout-ms 60000; then
+            cat /tmp/emp-performance.log
+            exit 1
+          fi
+
+  container-builds:
+    name: Build production containers
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build server image
+        run: >-
+          docker build
+          --file docker/Dockerfile.server
+          --tag emp-performance-server:${{ github.sha }}
+          .
+
+      - name: Build client image
+        run: >-
+          docker build
+          --file docker/Dockerfile.client
+          --build-arg VITE_API_URL=/api/v1
+          --build-arg VITE_SSO_LOGIN_URL=https://example.invalid/sso
+          --build-arg VITE_EMPCLOUD_RETURN_ORIGINS=https://example.invalid
+          --tag emp-performance-client:${{ github.sha }}
+          .

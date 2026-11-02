@@ -1,30 +1,214 @@
-# Auto-deploy to test server on push to main
-#
-# Required GitHub Secrets:
-#   DEPLOY_HOST     - Test server IP (163.227.174.141)
-#   DEPLOY_USER     - SSH username (empcloud-development)
-#   DEPLOY_PASSWORD - SSH password
-
 name: Deploy to Test Server
 
+# A release is eligible only after the CI workflow has completed successfully
+# for main. Manual deployments deliberately remain disabled so this gate cannot
+# be bypassed accidentally.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: emp-performance-test-deployment
+  cancel-in-progress: false
 
 jobs:
   deploy:
+    name: Deploy verified commit
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    timeout-minutes: 35
+    environment:
+      name: test
+      url: ${{ vars.DEPLOY_PUBLIC_URL }}
+    env:
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+      DEPLOY_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/home/empcloud-development/empcloud-projects/emp-performance' }}
+      DEPLOY_RELEASES_PATH: ${{ vars.DEPLOY_RELEASES_PATH }}
+      DEPLOY_CURRENT_LINK: ${{ vars.DEPLOY_CURRENT_LINK }}
+      DEPLOY_ENV_FILE: ${{ vars.DEPLOY_ENV_FILE }}
+      DEPLOY_HEALTH_URL: ${{ vars.DEPLOY_HEALTH_URL || 'http://127.0.0.1:4300' }}
+      PM2_APP_NAME: ${{ vars.PM2_APP_NAME || 'emp-performance' }}
+      PM2_INSTANCES: ${{ vars.PM2_INSTANCES || '1' }}
 
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
+      - name: Check out the verified revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Record release metadata
+        run: |
+          echo "Deploying verified commit ${DEPLOY_SHA}"
+          git show --no-patch --format='%H %cI %s' "${DEPLOY_SHA}"
+
+      - name: Validate deployment credentials
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST_FINGERPRINT: ${{ secrets.DEPLOY_HOST_FINGERPRINT }}
+        run: |
+          test -n "${DEPLOY_HOST}" || { echo "DEPLOY_HOST is not configured" >&2; exit 1; }
+          test -n "${DEPLOY_USER}" || { echo "DEPLOY_USER is not configured" >&2; exit 1; }
+          test -n "${DEPLOY_SSH_KEY}" || { echo "DEPLOY_SSH_KEY is not configured" >&2; exit 1; }
+          test -n "${DEPLOY_HOST_FINGERPRINT}" || { echo "DEPLOY_HOST_FINGERPRINT is not configured" >&2; exit 1; }
+
+      - name: Install, migrate, reload, and verify
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_SHA: ${{ env.DEPLOY_SHA }}
+          DEPLOY_RUN_ID: ${{ env.DEPLOY_RUN_ID }}
+          DEPLOY_PATH: ${{ env.DEPLOY_PATH }}
+          DEPLOY_RELEASES_PATH: ${{ env.DEPLOY_RELEASES_PATH }}
+          DEPLOY_CURRENT_LINK: ${{ env.DEPLOY_CURRENT_LINK }}
+          DEPLOY_ENV_FILE: ${{ env.DEPLOY_ENV_FILE }}
+          DEPLOY_HEALTH_URL: ${{ env.DEPLOY_HEALTH_URL }}
+          PM2_APP_NAME: ${{ env.PM2_APP_NAME }}
+          PM2_INSTANCES: ${{ env.PM2_INSTANCES }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
+          port: ${{ secrets.DEPLOY_SSH_PORT || 22 }}
           username: ${{ secrets.DEPLOY_USER }}
-          password: ${{ secrets.DEPLOY_PASSWORD }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          passphrase: ${{ secrets.DEPLOY_SSH_KEY_PASSPHRASE }}
+          fingerprint: ${{ secrets.DEPLOY_HOST_FINGERPRINT }}
+          envs: DEPLOY_SHA,DEPLOY_RUN_ID,DEPLOY_PATH,DEPLOY_RELEASES_PATH,DEPLOY_CURRENT_LINK,DEPLOY_ENV_FILE,DEPLOY_HEALTH_URL,PM2_APP_NAME,PM2_INSTANCES
+          command_timeout: 30m
           script: |
-            source ~/.nvm/nvm.sh
-            cd /home/empcloud-development/empcloud-projects/emp-performance
-            git stash; git pull origin main
-            pm2 restart emp-performance
+            set -Eeuo pipefail
+            umask 027
+
+            case "${DEPLOY_SHA}" in
+              ''|*[!0-9a-f]*) echo "DEPLOY_SHA must be a lowercase hexadecimal commit SHA" >&2; exit 2 ;;
+            esac
+            [ "${#DEPLOY_SHA}" -eq 40 ] || { echo "DEPLOY_SHA must contain 40 characters" >&2; exit 2; }
+            case "${DEPLOY_RUN_ID}" in
+              ''|*[!0-9-]*) echo "DEPLOY_RUN_ID contains invalid characters" >&2; exit 2 ;;
+            esac
+            case "${PM2_APP_NAME}" in
+              ''|*[!A-Za-z0-9_.-]*) echo "PM2_APP_NAME contains invalid characters" >&2; exit 2 ;;
+            esac
+            case "${DEPLOY_PATH}" in
+              /*) ;;
+              *) echo "DEPLOY_PATH must be absolute" >&2; exit 2 ;;
+            esac
+
+            if [ -s "${HOME}/.nvm/nvm.sh" ]; then
+              . "${HOME}/.nvm/nvm.sh"
+            fi
+
+            command -v git >/dev/null
+            command -v node >/dev/null
+            command -v corepack >/dev/null
+            command -v pm2 >/dev/null
+            git -C "${DEPLOY_PATH}" rev-parse --is-inside-work-tree >/dev/null
+
+            DEPLOY_RELEASES_PATH="${DEPLOY_RELEASES_PATH:-${DEPLOY_PATH}-releases}"
+            DEPLOY_CURRENT_LINK="${DEPLOY_CURRENT_LINK:-${DEPLOY_PATH}-current}"
+            DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-${DEPLOY_PATH}/.env}"
+            RELEASE_DIR="${DEPLOY_RELEASES_PATH}/${DEPLOY_SHA}-${DEPLOY_RUN_ID}"
+            ECOSYSTEM_FILE="${RELEASE_DIR}/scripts/pm2.ecosystem.cjs"
+
+            [ -f "${DEPLOY_ENV_FILE}" ] || { echo "Environment file not found: ${DEPLOY_ENV_FILE}" >&2; exit 2; }
+            [ ! -e "${RELEASE_DIR}" ] || { echo "Release already exists: ${RELEASE_DIR}" >&2; exit 2; }
+            if [ -e "${DEPLOY_CURRENT_LINK}" ] && [ ! -L "${DEPLOY_CURRENT_LINK}" ]; then
+              echo "DEPLOY_CURRENT_LINK exists but is not a symbolic link: ${DEPLOY_CURRENT_LINK}" >&2
+              exit 2
+            fi
+            mkdir -p "${DEPLOY_RELEASES_PATH}"
+
+            PREVIOUS_RELEASE=""
+            PREVIOUS_SHA="unknown"
+            if [ -L "${DEPLOY_CURRENT_LINK}" ]; then
+              PREVIOUS_RELEASE="$(readlink -f "${DEPLOY_CURRENT_LINK}")"
+            elif [ -f "${DEPLOY_PATH}/packages/server/dist/server/src/index.js" ]; then
+              # Bootstrap compatibility for the first release managed by this workflow.
+              PREVIOUS_RELEASE="${DEPLOY_PATH}"
+            fi
+            if [ -n "${PREVIOUS_RELEASE}" ]; then
+              PREVIOUS_SHA="$(git -C "${PREVIOUS_RELEASE}" rev-parse HEAD 2>/dev/null || printf 'unknown')"
+            fi
+
+            git -C "${DEPLOY_PATH}" fetch --prune origin main
+            git -C "${DEPLOY_PATH}" cat-file -e "${DEPLOY_SHA}^{commit}"
+            git -C "${DEPLOY_PATH}" merge-base --is-ancestor "${DEPLOY_SHA}" origin/main
+            git -C "${DEPLOY_PATH}" worktree add --detach "${RELEASE_DIR}" "${DEPLOY_SHA}"
+
+            ln -s "${DEPLOY_ENV_FILE}" "${RELEASE_DIR}/.env"
+            mkdir -p "${RELEASE_DIR}/packages/server/logs"
+
+            cd "${RELEASE_DIR}"
+            corepack enable
+            corepack prepare pnpm@9 --activate
+            pnpm install --frozen-lockfile
+            pnpm build
+
+            # Database migrations are a release step. Production application
+            # processes must set RUN_MIGRATIONS_ON_STARTUP=false.
+            NODE_ENV=production \
+            ENV_FILE="${DEPLOY_ENV_FILE}" \
+            RELEASE_SHA="${DEPLOY_SHA}" \
+              pnpm db:migrate:prod
+
+            deploy_failed=0
+            RELEASE_DIR="${RELEASE_DIR}" \
+            RELEASE_SHA="${DEPLOY_SHA}" \
+            PM2_APP_NAME="${PM2_APP_NAME}" \
+            PM2_INSTANCES="${PM2_INSTANCES}" \
+              pm2 startOrReload "${ECOSYSTEM_FILE}" --only "${PM2_APP_NAME}" --update-env || deploy_failed=1
+
+            if [ "${deploy_failed}" -eq 0 ]; then
+              node scripts/smoke-check.mjs \
+                --base-url "${DEPLOY_HEALTH_URL}" \
+                --path /health/ready \
+                --timeout-ms 90000 || deploy_failed=1
+            fi
+
+            if [ "${deploy_failed}" -eq 0 ]; then
+              node scripts/smoke-check.mjs \
+                --base-url "${DEPLOY_HEALTH_URL}" \
+                --path /health/live \
+                --expected-release "${DEPLOY_SHA}" \
+                --timeout-ms 30000 || deploy_failed=1
+            fi
+
+            if [ "${deploy_failed}" -ne 0 ]; then
+              echo "Release verification failed; restoring the previous application release" >&2
+              if [ -n "${PREVIOUS_RELEASE}" ] && [ -f "${PREVIOUS_RELEASE}/packages/server/dist/server/src/index.js" ]; then
+                ROLLBACK_ECOSYSTEM_FILE="${PREVIOUS_RELEASE}/scripts/pm2.ecosystem.cjs"
+                if [ ! -f "${ROLLBACK_ECOSYSTEM_FILE}" ]; then
+                  # The first workflow-managed deploy may roll back to a legacy
+                  # checkout that predates the ecosystem file.
+                  ROLLBACK_ECOSYSTEM_FILE="${ECOSYSTEM_FILE}"
+                fi
+                RELEASE_DIR="${PREVIOUS_RELEASE}" \
+                RELEASE_SHA="${PREVIOUS_SHA}" \
+                PM2_APP_NAME="${PM2_APP_NAME}" \
+                PM2_INSTANCES="${PM2_INSTANCES}" \
+                  pm2 startOrReload "${ROLLBACK_ECOSYSTEM_FILE}" --only "${PM2_APP_NAME}" --update-env
+                node scripts/smoke-check.mjs \
+                  --base-url "${DEPLOY_HEALTH_URL}" \
+                  --path /health/ready \
+                  --timeout-ms 90000
+                pm2 save
+              else
+                pm2 delete "${PM2_APP_NAME}" || true
+                echo "No previous release was available; the failed process was stopped" >&2
+              fi
+              exit 1
+            fi
+
+            NEXT_LINK="${DEPLOY_CURRENT_LINK}.${DEPLOY_RUN_ID}.next"
+            ln -s "${RELEASE_DIR}" "${NEXT_LINK}"
+            mv -Tf "${NEXT_LINK}" "${DEPLOY_CURRENT_LINK}"
+            pm2 save
+            echo "Release ${DEPLOY_SHA} is ready at ${DEPLOY_HEALTH_URL}"

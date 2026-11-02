@@ -25,6 +25,7 @@ import {
   ShieldCheck,
   Gauge,
   ClipboardCheck,
+  Activity,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
@@ -42,6 +43,7 @@ interface NavItem {
   labelKey: string;
   icon: any;
   adminOnly?: boolean; // if true, hidden from employee role
+  allowedRoles?: readonly CanonicalRole[];
 }
 
 interface NavSection {
@@ -98,7 +100,16 @@ const NAV_SECTIONS: NavSection[] = [
   },
   {
     titleKey: "nav.sections.admin",
-    items: [{ to: "/settings", labelKey: "nav.settings", icon: Settings, adminOnly: true }],
+    items: [
+      { to: "/settings", labelKey: "nav.settings", icon: Settings, adminOnly: true },
+      {
+        to: "/settings/integration-operations",
+        labelKey: "nav.integrationOperations",
+        icon: Activity,
+        adminOnly: true,
+        allowedRoles: ["super_admin", "org_admin", "hr_admin"],
+      },
+    ],
   },
 ];
 
@@ -106,7 +117,7 @@ const ADMIN_ROLES: CanonicalRole[] = ["super_admin", "org_admin", "hr_admin", "h
 
 // Routes that need exact-match highlighting (index routes whose path is a
 // prefix of deeper routes).
-const EXACT_MATCH = new Set(["/my", "/goals", "/feedback", "/letters", "/analytics"]);
+const EXACT_MATCH = new Set(["/my", "/goals", "/feedback", "/letters", "/analytics", "/settings"]);
 
 export function DashboardLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -164,7 +175,11 @@ export function DashboardLayout() {
         <nav className={cn("flex-1 overflow-y-auto py-4", collapsed ? "px-2" : "px-3")}>
           {NAV_SECTIONS.map((section, si) => {
             const isAdmin = ADMIN_ROLES.includes(user?.role || "employee");
-            const visibleItems = section.items.filter((item) => !item.adminOnly || isAdmin);
+            const visibleItems = section.items.filter(
+              (item) =>
+                (!item.adminOnly || isAdmin) &&
+                (!item.allowedRoles || item.allowedRoles.includes(user?.role || "employee")),
+            );
             if (visibleItems.length === 0) return null;
             return (
               <div key={section.titleKey ?? `section-${si}`} className={si > 0 ? (collapsed ? "mt-3" : "mt-5") : ""}>

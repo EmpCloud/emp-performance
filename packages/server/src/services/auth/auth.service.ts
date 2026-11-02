@@ -13,6 +13,7 @@ import { v4 as uuidv4 } from "uuid";
 import { config } from "../../config";
 import { logger } from "../../utils/logger";
 import { getDB } from "../../db/adapters";
+import type { IDataContext } from "../../db/adapters/interface";
 import {
   findUserByEmail,
   findUserById,
@@ -56,8 +57,24 @@ interface SessionContext {
   ipAddress?: string;
 }
 
+interface RefreshTokenClaims extends jwt.JwtPayload {
+  userId: number;
+  type: "refresh";
+  jti: string;
+}
+
+interface RefreshTokenSession {
+  id: string;
+  user_id: number;
+  organization_id: number;
+  token_hash: string;
+  expires_at: Date | string;
+  revoked_at: Date | string | null;
+}
+
 function signAccessToken(payload: AuthPayload): string {
   return jwt.sign(payload, config.jwt.secret, {
+    algorithm: "HS256",
     expiresIn: config.jwt.accessExpiry as any,
   });
 }
@@ -68,12 +85,44 @@ function signAccessToken(payload: AuthPayload): string {
  */
 function signRefreshToken(userId: number, jti: string): string {
   return jwt.sign({ userId, type: "refresh", jti }, config.jwt.secret, {
+    algorithm: "HS256",
     expiresIn: config.jwt.refreshExpiry as any,
   });
 }
 
 function sha256(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function hashesMatch(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left, "utf8");
+  const rightBuffer = Buffer.from(right, "utf8");
+  return (
+    leftBuffer.length === rightBuffer.length &&
+    crypto.timingSafeEqual(leftBuffer, rightBuffer)
+  );
+}
+
+function verifyRefreshToken(token: string): RefreshTokenClaims {
+  let decoded: string | jwt.JwtPayload;
+  try {
+    decoded = jwt.verify(token, config.jwt.secret, { algorithms: ["HS256"] });
+  } catch {
+    throw new UnauthorizedError("Invalid or expired refresh token");
+  }
+
+  if (
+    typeof decoded === "string" ||
+    decoded.type !== "refresh" ||
+    typeof decoded.jti !== "string" ||
+    decoded.jti.length === 0 ||
+    !Number.isSafeInteger(decoded.userId) ||
+    decoded.userId <= 0
+  ) {
+    throw new UnauthorizedError("Invalid or expired refresh token");
+  }
+
+  return decoded as RefreshTokenClaims;
 }
 
 function parseExpiryMs(expiry: string): number {
@@ -93,7 +142,8 @@ function parseExpiryMs(expiry: string): number {
 /**
  * Persist a refresh-token session row and return the signed refresh token.
  */
-async function issueRefreshToken(
+async function createRefreshTokenSession(
+  db: IDataContext,
   userId: number,
   orgId: number,
   ctx?: SessionContext,
@@ -102,25 +152,26 @@ async function issueRefreshToken(
   const token = signRefreshToken(userId, jti);
   const expiresAt = new Date(Date.now() + parseExpiryMs(config.jwt.refreshExpiry));
 
-  try {
-    const db = getDB();
-    await db.create("refresh_tokens", {
-      id: jti,
-      user_id: userId,
-      organization_id: orgId,
-      token_hash: sha256(token),
-      expires_at: expiresAt,
-      revoked_at: null,
-      user_agent: ctx?.userAgent ?? null,
-      ip_address: ctx?.ipAddress ?? null,
-    } as any);
-  } catch (err) {
-    // If the session store is unavailable the token is still cryptographically
-    // valid; log but do not block login.
-    logger.error("Failed to persist refresh-token session:", err);
-  }
+  await db.create("refresh_tokens", {
+    id: jti,
+    user_id: userId,
+    organization_id: orgId,
+    token_hash: sha256(token),
+    expires_at: expiresAt,
+    revoked_at: null,
+    user_agent: ctx?.userAgent ?? null,
+    ip_address: ctx?.ipAddress ?? null,
+  } as any);
 
   return token;
+}
+
+async function issueRefreshToken(
+  userId: number,
+  orgId: number,
+  ctx?: SessionContext,
+): Promise<string> {
+  return createRefreshTokenSession(getDB(), userId, orgId, ctx);
 }
 
 export async function login(
@@ -329,31 +380,10 @@ export async function refreshToken(
   token: string,
   ctx?: SessionContext,
 ): Promise<{ accessToken: string; refreshToken: string }> {
-  let decoded: any;
-  try {
-    decoded = jwt.verify(token, config.jwt.secret);
-  } catch {
-    throw new UnauthorizedError("Invalid or expired refresh token");
-  }
+  const decoded = verifyRefreshToken(token);
 
-  if (decoded.type !== "refresh") {
-    throw new UnauthorizedError("Invalid token type");
-  }
-
-  // PL3: verify the refresh-token session has not been revoked. Sessions are
-  // keyed by jti. Tokens minted before the session store existed have no jti —
-  // for backwards compatibility these are allowed through (best effort).
-  if (decoded.jti) {
-    const db = getDB();
-    const session = await db.findOne<any>("refresh_tokens", { id: decoded.jti });
-    if (!session || session.revoked_at) {
-      throw new UnauthorizedError("Refresh token has been revoked");
-    }
-    if (session.expires_at && new Date(session.expires_at) < new Date()) {
-      throw new UnauthorizedError("Refresh token has expired");
-    }
-  }
-
+  // Resolve the current identity before binding the persisted session to its
+  // live user and organization below.
   const user = await findUserById(decoded.userId);
   if (!user || user.status !== 1) {
     throw new UnauthorizedError("User not found or inactive");
@@ -375,21 +405,53 @@ export async function refreshToken(
     orgName: org.name,
   };
 
-  // Rotate: revoke the old session and issue a fresh one.
-  if (decoded.jti) {
-    try {
-      await getDB().update("refresh_tokens", decoded.jti, {
-        revoked_at: new Date(),
-      } as any);
-    } catch (err) {
-      logger.error("Failed to rotate refresh-token session:", err);
-    }
-  }
-
   const newAccessToken = signAccessToken(payload);
-  const newRefreshToken = await issueRefreshToken(user.id, user.organization_id, ctx);
+  const tokenHash = sha256(token);
+  const db = getDB();
 
-  return { accessToken: newAccessToken, refreshToken: newRefreshToken };
+  // Revoke-and-replace is one transaction. The conditional update is the
+  // one-time-use gate: concurrent replays can both read the row, but only one
+  // can change revoked_at from NULL and create a successor session.
+  return db.transaction(async (trx) => {
+    const session = await trx.findOne<RefreshTokenSession>("refresh_tokens", {
+      id: decoded.jti,
+    });
+    if (
+      !session ||
+      session.revoked_at ||
+      Number(session.user_id) !== decoded.userId ||
+      Number(session.organization_id) !== Number(user.organization_id) ||
+      typeof session.token_hash !== "string" ||
+      !hashesMatch(session.token_hash, tokenHash) ||
+      !session.expires_at ||
+      new Date(session.expires_at).getTime() <= Date.now()
+    ) {
+      throw new UnauthorizedError("Invalid or expired refresh token");
+    }
+
+    const revoked = await trx.updateMany(
+      "refresh_tokens",
+      {
+        id: decoded.jti,
+        user_id: decoded.userId,
+        organization_id: user.organization_id,
+        token_hash: tokenHash,
+        revoked_at: null,
+      },
+      { revoked_at: new Date() },
+    );
+    if (revoked !== 1) {
+      throw new UnauthorizedError("Refresh token has already been used");
+    }
+
+    const newRefreshToken = await createRefreshTokenSession(
+      trx,
+      user.id,
+      user.organization_id,
+      ctx,
+    );
+    return { accessToken: newAccessToken, refreshToken: newRefreshToken };
+  });
 }
 
 /**
@@ -399,26 +461,26 @@ export async function refreshToken(
  */
 export async function logout(token: string, actingUserId?: number): Promise<void> {
   if (!token) return;
-  let decoded: any;
+  let decoded: RefreshTokenClaims;
   try {
-    decoded = jwt.verify(token, config.jwt.secret);
+    decoded = verifyRefreshToken(token);
   } catch {
     return; // nothing to revoke
   }
-  if (decoded.type !== "refresh" || !decoded.jti) return;
   if (actingUserId && Number(decoded.userId) !== Number(actingUserId)) {
     throw new UnauthorizedError("Refresh token does not belong to the current user");
   }
 
-  try {
-    const db = getDB();
-    const session = await db.findOne<any>("refresh_tokens", { id: decoded.jti });
-    if (session && !session.revoked_at) {
-      await db.update("refresh_tokens", decoded.jti, { revoked_at: new Date() } as any);
-    }
-  } catch (err) {
-    logger.error("Failed to revoke refresh-token session on logout:", err);
-  }
+  await getDB().updateMany(
+    "refresh_tokens",
+    {
+      id: decoded.jti,
+      user_id: decoded.userId,
+      token_hash: sha256(token),
+      revoked_at: null,
+    },
+    { revoked_at: new Date() },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -443,18 +505,15 @@ export async function changePassword(
     throw new UnauthorizedError("Current password is incorrect");
   }
   const hash = await bcrypt.hash(newPassword, 12);
-  await updateUserPassword(userId, hash);
 
-  // Revoke all existing sessions so other devices must re-authenticate.
-  try {
-    await getDB().updateMany(
-      "refresh_tokens",
-      { user_id: userId, revoked_at: null },
-      { revoked_at: new Date(), updated_at: new Date() },
-    );
-  } catch (err) {
-    logger.error("Failed to revoke sessions after password change:", err);
-  }
+  // Revoke before changing the password. If either store is unavailable, do
+  // not report a successful password change while old refresh sessions live.
+  await getDB().updateMany(
+    "refresh_tokens",
+    { user_id: userId, revoked_at: null },
+    { revoked_at: new Date(), updated_at: new Date() },
+  );
+  await updateUserPassword(userId, hash);
   logger.info(`Password changed for user ${userId}`);
 }
 
@@ -507,29 +566,40 @@ export async function resetPassword(rawToken: string, newPassword: string): Prom
   const tokenHash = sha256(rawToken);
   const db = getDB();
 
-  const row = await db.findOne<any>("password_resets", { token_hash: tokenHash });
-  if (!row || row.consumed_at) {
-    throw new ValidationError("This reset link is invalid or has already been used.");
-  }
-  if (row.expires_at && new Date(row.expires_at) < new Date()) {
-    throw new ValidationError("This reset link has expired. Please request a new one.");
-  }
+  // Claim the reset token and revoke sessions atomically in the performance
+  // database. The password write happens only after this boundary is committed.
+  // A master-DB failure consumes the token (safe failure); the user can request
+  // another reset link without leaving older refresh sessions active.
+  const userId = await db.transaction(async (trx) => {
+    const row = await trx.findOne<any>("password_resets", { token_hash: tokenHash });
+    if (!row || row.consumed_at) {
+      throw new ValidationError("This reset link is invalid or has already been used.");
+    }
+    if (!row.expires_at || new Date(row.expires_at).getTime() <= Date.now()) {
+      throw new ValidationError("This reset link has expired. Please request a new one.");
+    }
 
-  const hash = await bcrypt.hash(newPassword, 12);
-  await updateUserPassword(row.user_id, hash);
-  await db.update("password_resets", row.id, { consumed_at: new Date() } as any);
+    const consumedAt = new Date();
+    const claimed = await trx.updateMany(
+      "password_resets",
+      { id: row.id, token_hash: tokenHash, consumed_at: null },
+      { consumed_at: consumedAt },
+    );
+    if (claimed !== 1) {
+      throw new ValidationError("This reset link is invalid or has already been used.");
+    }
 
-  // Revoke all sessions for the user.
-  try {
-    await db.updateMany(
+    await trx.updateMany(
       "refresh_tokens",
       { user_id: row.user_id, revoked_at: null },
-      { revoked_at: new Date(), updated_at: new Date() },
+      { revoked_at: consumedAt, updated_at: consumedAt },
     );
-  } catch (err) {
-    logger.error("Failed to revoke sessions after password reset:", err);
-  }
-  logger.info(`Password reset completed for user ${row.user_id}`);
+    return Number(row.user_id);
+  });
+
+  const hash = await bcrypt.hash(newPassword, 12);
+  await updateUserPassword(userId, hash);
+  logger.info(`Password reset completed for user ${userId}`);
 }
 
 /**

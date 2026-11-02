@@ -3,9 +3,9 @@
 // ============================================================================
 
 import express from "express";
+import type { Server } from "node:http";
 import cors from "cors";
 import helmet from "helmet";
-import morgan from "morgan";
 import compression from "compression";
 import { config } from "./config";
 import { initDB, closeDB } from "./db/adapters";
@@ -20,11 +20,12 @@ import { competencyRoutes } from "./api/routes/competency.routes";
 import { reviewCycleRoutes } from "./api/routes/review-cycle.routes";
 import { reviewRoutes } from "./api/routes/review.routes";
 import { reviewOutcomeRoutes } from "./api/routes/review-outcome.routes";
+import { integrationOutboxRoutes } from "./api/routes/integration-outbox.routes";
 import { authRoutes } from "./api/routes/auth.routes";
 import { careerPathRoutes } from "./api/routes/career-path.routes";
 import { oneOnOneRoutes } from "./api/routes/one-on-one.routes";
 import { feedbackRoutes } from "./api/routes/feedback.routes";
-import { analyticsRoutes } from "./api/routes/analytics.routes";
+import { analyticsRoutes, skillsGapHandler } from "./api/routes/analytics.routes";
 import { peerReviewRoutes } from "./api/routes/peer-review.routes";
 import { successionRoutes } from "./api/routes/succession.routes";
 import { notificationRoutes } from "./api/routes/notification.routes";
@@ -34,6 +35,7 @@ import { managerEffectivenessRoutes } from "./api/routes/manager-effectiveness.r
 import { usersRoutes } from "./api/routes/users.routes";
 import { authenticate, authorize } from "./api/middleware/auth.middleware";
 import { errorHandler } from "./api/middleware/error.middleware";
+import { requestContext } from "./api/middleware/request-context.middleware";
 import { apiLimiter, authLimiter } from "./api/middleware/rate-limit.middleware";
 import { swaggerUIHandler, openapiHandler } from "./api/docs";
 import * as analyticsService from "./services/analytics/analytics.service";
@@ -41,8 +43,21 @@ import * as letterService from "./services/letter/performance-letter.service";
 import { sendSuccess } from "./utils/response";
 import { ValidationError } from "./utils/errors";
 import { recordMounts } from "./api/route-recorder";
+import { runGracefulShutdown } from "./runtime/graceful-shutdown";
+import { runtimeState } from "./runtime/runtime-state";
 
 const app = express();
+const SHUTDOWN_TIMEOUT_MS = (
+  Number.isFinite(config.runtime.shutdownTimeoutMs) && config.runtime.shutdownTimeoutMs >= 1_000
+    ? config.runtime.shutdownTimeoutMs
+    : 30_000
+);
+
+let httpServer: Server | null = null;
+let shutdownPromise: Promise<void> | null = null;
+let requestedExitCode = 0;
+
+app.set("trust proxy", config.runtime.trustProxy);
 
 // Record route mounts for OpenAPI auto-discovery (before any .use mounts).
 recordMounts(app);
@@ -61,26 +76,17 @@ const swaggerUiAssetPath = (
 // sets its own permissive CSP for that route.
 const helmetStrict = helmet();
 const helmetNoCsp = helmet({ contentSecurityPolicy: false });
+app.use(requestContext);
 app.use((req, res, next) =>
-  req.path.startsWith("/api/docs") ? helmetNoCsp(req, res, next) : helmetStrict(req, res, next),
+  config.security.docsEnabled && req.path.startsWith("/api/docs")
+    ? helmetNoCsp(req, res, next)
+    : helmetStrict(req, res, next),
 );
 app.use(
   cors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
       if (config.cors.origin === "*") return callback(null, true);
-      // Allow empcloud.com subdomains (production & test)
-      if (origin.endsWith(".empcloud.com") && origin.startsWith("https://")) {
-        return callback(null, true);
-      }
-      if (
-        config.env === "development" &&
-        (origin.startsWith("http://localhost") ||
-          origin.startsWith("http://127.0.0.1") ||
-          origin.endsWith(".ngrok-free.dev"))
-      ) {
-        return callback(null, true);
-      }
       const allowed = config.cors.origin.split(",").map((s) => s.trim());
       if (allowed.includes(origin)) return callback(null, true);
       callback(new Error("Not allowed by CORS"));
@@ -91,7 +97,6 @@ app.use(
 app.use(compression());
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
-app.use(morgan("combined", { stream: { write: (msg) => logger.info(msg.trim()) } }));
 
 // ---------------------------------------------------------------------------
 // Health check
@@ -116,6 +121,7 @@ v1.use("/pips", pipRoutes);
 v1.use("/review-cycles", reviewCycleRoutes);
 v1.use("/reviews", reviewRoutes);
 v1.use("/review-outcomes", reviewOutcomeRoutes);
+v1.use("/integrations/outbox", integrationOutboxRoutes);
 v1.use("/competencies", competencyRoutes);
 v1.use("/competency-frameworks", competencyRoutes); // alias
 v1.use("/career-paths", careerPathRoutes);
@@ -149,18 +155,7 @@ v1.get("/nine-box", authenticate, authorize("hr_admin", "hr_manager", "org_admin
 );
 
 // #872: GET /skills-gap/:employeeId -> /analytics/skills-gap/:employeeId
-v1.get("/skills-gap/:employeeId", authenticate,
-  async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    try {
-      const orgId = req.user!.empcloudOrgId;
-      const employeeId = parseInt(String(req.params.employeeId));
-      if (isNaN(employeeId)) throw new ValidationError("employeeId must be a number");
-      const result = await analyticsService.getSkillsGap(orgId, employeeId);
-      const recommendations = analyticsService.getLearningRecommendations(result.competencies);
-      sendSuccess(res, { ...result, recommendations });
-    } catch (err) { next(err); }
-  },
-);
+v1.get("/skills-gap/:employeeId", authenticate, skillsGapHandler);
 
 // #873: GET /letter-templates -> /letters/templates
 v1.get("/letter-templates", authenticate, authorize("hr_admin", "hr_manager", "org_admin"),
@@ -178,11 +173,13 @@ v1.use("/auth", authLimiter, authRoutes);
 
 app.use("/api/v1", v1);
 
-// API Documentation
-// Self-hosted Swagger UI assets (swagger-ui-dist) served same-origin.
-app.use("/api/docs/ui", express.static(swaggerUiAssetPath, { maxAge: "7d", immutable: true }));
-app.get("/api/docs", swaggerUIHandler);
-app.get("/api/docs/openapi.json", openapiHandler);
+// API Documentation. Production exposure is opt-in through configuration.
+if (config.security.docsEnabled) {
+  // Self-hosted Swagger UI assets (swagger-ui-dist) served same-origin.
+  app.use("/api/docs/ui", express.static(swaggerUiAssetPath, { maxAge: "7d", immutable: true }));
+  app.get("/api/docs", swaggerUIHandler);
+  app.get("/api/docs/openapi.json", openapiHandler);
+}
 
 // ---------------------------------------------------------------------------
 // Error handling
@@ -192,6 +189,25 @@ app.use(errorHandler);
 // ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
+async function listen(): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const candidate = app.listen(config.port, config.host);
+    httpServer = candidate;
+
+    const onError = (error: Error) => {
+      candidate.off("listening", onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      candidate.off("error", onError);
+      resolve();
+    };
+
+    candidate.once("error", onError);
+    candidate.once("listening", onListening);
+  });
+}
+
 async function start() {
   try {
     // Validate configuration
@@ -200,15 +216,23 @@ async function start() {
 
     // Initialize EmpCloud master database (users, orgs, auth)
     await initEmpCloudDB();
-    await migrateEmpCloudDB();
+    if (config.runtime.migrateEmpCloudOnStartup) {
+      await migrateEmpCloudDB();
+    } else {
+      logger.info("EmpCloud startup migration skipped by runtime configuration");
+    }
 
     // Initialize performance module database
     const db = await initDB();
     logger.info("Performance database connected");
 
     // Run migrations
-    await db.migrate();
-    logger.info("Performance database migrations applied");
+    if (config.runtime.migrateOnStartup) {
+      await db.migrate();
+      logger.info("Performance database migrations applied");
+    } else {
+      logger.info("Performance database startup migration skipped by runtime configuration");
+    }
 
     // Deliver transactional integration events from the database outbox. This
     // dispatcher is intentionally independent of Redis so release durability
@@ -220,40 +244,106 @@ async function start() {
     const { initJobQueues } = await import("./jobs/queue");
     await initJobQueues();
 
-    // Start server
-    app.listen(config.port, config.host, () => {
-      logger.info(`emp-performance server running at http://${config.host}:${config.port}`);
-      logger.info(`   Environment: ${config.env}`);
-    });
+    // Start accepting traffic only after every required dependency and
+    // background subsystem has completed initialization.
+    await listen();
+    if (!runtimeState.markReady()) {
+      throw new Error("Server startup completed after shutdown was requested");
+    }
+    logger.info(`emp-performance server running at http://${config.host}:${config.port}`);
+    logger.info(`   Environment: ${config.env}`);
   } catch (error) {
     logger.error("Failed to start server:", error);
-    process.exit(1);
+    runtimeState.markFailed();
+    await requestShutdown("startup_failure", 1);
   }
 }
 
+// ---------------------------------------------------------------------------
 // Graceful shutdown
-const shutdown = async () => {
-  logger.info("Shutting down...");
-  try {
+// ---------------------------------------------------------------------------
+async function closeRuntimeDependencies(): Promise<void> {
+  const errors: unknown[] = [];
+  const attempt = async (name: string, close: () => Promise<void>) => {
+    try {
+      await close();
+    } catch (error) {
+      errors.push(error);
+      logger.error(`Failed to close ${name} during shutdown`, error);
+    }
+  };
+
+  await attempt("outbox dispatcher", async () => {
     const { stopOutboxDispatcher } = await import("./jobs/outbox.dispatcher");
     await stopOutboxDispatcher();
-  } catch {
-    // Dispatcher may not have been initialized
-  }
-  try {
+  });
+  await attempt("job queues", async () => {
     const { closeJobQueues } = await import("./jobs/queue");
     await closeJobQueues();
-  } catch {
-    // Queue may not have been initialized
+  });
+  await attempt("performance database", closeDB);
+  await attempt("EmpCloud database", closeEmpCloudDB);
+
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "One or more runtime dependencies failed to close");
   }
-  await closeDB();
-  await closeEmpCloudDB();
-  process.exit(0);
-};
+}
 
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
+async function performShutdown(reason: string): Promise<void> {
+  runtimeState.markDraining();
+  logger.info("Shutting down...", { reason });
 
-start();
+  const result = await runGracefulShutdown({
+    server: httpServer,
+    closeDependencies: closeRuntimeDependencies,
+    timeoutMs: SHUTDOWN_TIMEOUT_MS,
+    onTimeout: () => {
+      logger.error(`Graceful shutdown exceeded ${SHUTDOWN_TIMEOUT_MS}ms; forcing exit`);
+      httpServer?.closeAllConnections?.();
+    },
+  });
+
+  if (result.timedOut || result.errors.length > 0 || requestedExitCode > 0) {
+    requestedExitCode = 1;
+    runtimeState.markFailed();
+    if (result.errors.length > 0) {
+      logger.error("Graceful shutdown completed with errors", {
+        errorCount: result.errors.length,
+      });
+    }
+  } else {
+    runtimeState.markStopped();
+  }
+
+  process.exit(requestedExitCode);
+}
+
+function requestShutdown(reason: string, exitCode = 0): Promise<void> {
+  requestedExitCode = Math.max(requestedExitCode, exitCode);
+  if (!shutdownPromise) {
+    shutdownPromise = performShutdown(reason);
+  }
+  return shutdownPromise;
+}
+
+function fatalDetails(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return { message: error.message, stack: error.stack };
+  }
+  return { reason: String(error) };
+}
+
+function handleFatalError(source: string, error: unknown): void {
+  logger.error(`Fatal process error: ${source}`, fatalDetails(error));
+  runtimeState.markFailed();
+  void requestShutdown(source, 1);
+}
+
+process.on("SIGTERM", () => void requestShutdown("SIGTERM"));
+process.on("SIGINT", () => void requestShutdown("SIGINT"));
+process.on("uncaughtException", (error) => handleFatalError("uncaughtException", error));
+process.on("unhandledRejection", (reason) => handleFatalError("unhandledRejection", reason));
+
+void start();
 
 export { app };

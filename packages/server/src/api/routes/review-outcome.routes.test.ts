@@ -10,9 +10,14 @@ const mocks = vi.hoisted(() => ({
   withdrawReviewOutcomeAppeal: vi.fn(),
   startReviewOutcomeAppeal: vi.fn(),
   resolveReviewOutcomeAppeal: vi.fn(),
+  listOutcomeRevisions: vi.fn(),
+  proposeOutcomeCorrection: vi.fn(),
+  approveOutcomeCorrection: vi.fn(),
+  rejectOutcomeCorrection: vi.fn(),
 }));
 
 vi.mock("../../services/review/review-outcome.service", () => mocks);
+vi.mock("../../services/review/review-outcome-correction.service", () => mocks);
 
 vi.mock("../middleware/auth.middleware", () => ({
   authenticate: (_req: Request, _res: Response, next: NextFunction) => next(),
@@ -21,9 +26,13 @@ vi.mock("../middleware/auth.middleware", () => ({
 
 import {
   acknowledgeReviewOutcome,
+  approveReviewOutcomeCorrection,
   getReviewOutcome,
   listMyReviewOutcomes,
   listReviewOutcomeAppeals,
+  listReviewOutcomeRevisions,
+  proposeReviewOutcomeCorrection,
+  rejectReviewOutcomeCorrection,
   resolveReviewOutcomeAppeal,
   submitReviewOutcomeAppeal,
 } from "./review-outcome.routes";
@@ -32,6 +41,7 @@ const ORG_ID = 7;
 const USER_ID = 101;
 const OUTCOME_ID = "11111111-1111-4111-8111-111111111111";
 const CYCLE_ID = "22222222-2222-4222-8222-222222222222";
+const REVISION_ID = "33333333-3333-4333-8333-333333333333";
 
 function request(options: {
   role?: "employee" | "hr_admin";
@@ -80,6 +90,10 @@ describe("review outcome routes", () => {
     mocks.acknowledgeReviewOutcome.mockResolvedValue({ id: OUTCOME_ID, acknowledged_at: "now" });
     mocks.submitReviewOutcomeAppeal.mockResolvedValue({ id: OUTCOME_ID, appeal_status: "submitted" });
     mocks.resolveReviewOutcomeAppeal.mockResolvedValue({ id: OUTCOME_ID, appeal_status: "upheld" });
+    mocks.listOutcomeRevisions.mockResolvedValue([]);
+    mocks.proposeOutcomeCorrection.mockResolvedValue({ id: REVISION_ID, status: "pending" });
+    mocks.approveOutcomeCorrection.mockResolvedValue({ id: REVISION_ID, status: "applied" });
+    mocks.rejectOutcomeCorrection.mockResolvedValue({ id: REVISION_ID, status: "rejected" });
   });
 
   it("derives the mine scope from the authenticated actor", async () => {
@@ -174,5 +188,68 @@ describe("review outcome routes", () => {
         resolution_note: "The submitted evidence does not support a rating correction.",
       },
     );
+  });
+
+  it("lists policy-filtered revision history for the authenticated actor", async () => {
+    const req = request();
+
+    await listReviewOutcomeRevisions(req, response(), vi.fn());
+
+    expect(mocks.listOutcomeRevisions).toHaveBeenCalledWith(ORG_ID, OUTCOME_ID, req.actor);
+  });
+
+  it("validates and trims a correction proposal", async () => {
+    const req = request({
+      role: "hr_admin",
+      body: {
+        rating: 4.5,
+        reason: "   The upheld appeal supports a corrected final rating.   ",
+      },
+    });
+    const res = response();
+
+    await proposeReviewOutcomeCorrection(req, res, vi.fn());
+
+    expect(mocks.proposeOutcomeCorrection).toHaveBeenCalledWith(
+      ORG_ID,
+      OUTCOME_ID,
+      req.actor,
+      { rating: 4.5, reason: "The upheld appeal supports a corrected final rating." },
+    );
+    expect(vi.mocked(res.status)).toHaveBeenCalledWith(201);
+  });
+
+  it("forwards an independent correction approval with validated params", async () => {
+    const req = request({
+      role: "hr_admin",
+      params: { id: OUTCOME_ID, revisionId: REVISION_ID },
+      body: { review_note: "  Independently verified.  " },
+    });
+
+    await approveReviewOutcomeCorrection(req, response(), vi.fn());
+
+    expect(mocks.approveOutcomeCorrection).toHaveBeenCalledWith(
+      ORG_ID,
+      OUTCOME_ID,
+      REVISION_ID,
+      req.actor,
+      { review_note: "Independently verified." },
+    );
+  });
+
+  it("requires a substantive rejection note", async () => {
+    const next = vi.fn();
+    await rejectReviewOutcomeCorrection(
+      request({
+        role: "hr_admin",
+        params: { id: OUTCOME_ID, revisionId: REVISION_ID },
+        body: { review_note: "Too short" },
+      }),
+      response(),
+      next,
+    );
+
+    expect(mocks.rejectOutcomeCorrection).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ name: "ZodError" }));
   });
 });

@@ -36,5 +36,6 @@ COPY --from=builder /app/packages/server/node_modules ./packages/server/node_mod
 USER appuser
 EXPOSE 4300
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:4300/health >/dev/null || exit 1
+  CMD wget -qO- http://127.0.0.1:4300/health/ready >/dev/null || exit 1
+STOPSIGNAL SIGTERM
 CMD ["node", "packages/server/dist/server/src/index.js"]

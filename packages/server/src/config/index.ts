@@ -1,11 +1,50 @@
 import dotenv from "dotenv";
 import path from "path";
-dotenv.config({ path: path.resolve(process.cwd(), "../../.env") });
+
+// Production configuration is injected by the process manager or container.
+// An explicit ENV_FILE remains available for controlled deployments, while
+// local development keeps the historical workspace .env behavior.
+if (process.env.NODE_ENV !== "production" || process.env.ENV_FILE) {
+  dotenv.config({
+    path: path.resolve(process.cwd(), process.env.ENV_FILE || "../../.env"),
+  });
+}
+
+const environment = process.env.NODE_ENV || "development";
+
+function booleanValue(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  return value.trim().toLowerCase() === "true";
+}
+
+function trustProxyValue(value: string | undefined): boolean | number {
+  if (!value || value.trim().toLowerCase() === "false") return false;
+  if (value.trim().toLowerCase() === "true") return true;
+  const hops = Number(value);
+  return Number.isInteger(hops) && hops >= 0 ? hops : false;
+}
 
 export const config = {
-  env: process.env.NODE_ENV || "development",
+  env: environment,
   port: parseInt(process.env.PORT || "4300"),
   host: process.env.HOST || "0.0.0.0",
+
+  runtime: {
+    migrateOnStartup: booleanValue(
+      process.env.RUN_MIGRATIONS_ON_STARTUP,
+      environment !== "production",
+    ),
+    migrateEmpCloudOnStartup: booleanValue(
+      process.env.RUN_EMPCLOUD_MIGRATIONS_ON_STARTUP,
+      environment !== "production",
+    ),
+    redisRequired: booleanValue(process.env.REDIS_REQUIRED, false),
+    shutdownTimeoutMs: parseInt(process.env.SHUTDOWN_TIMEOUT_MS || "30000"),
+    dependencyTimeoutMs: parseInt(process.env.DEPENDENCY_TIMEOUT_MS || "3000"),
+    trustProxy: trustProxyValue(process.env.TRUST_PROXY),
+    releaseSha: process.env.RELEASE_SHA || "development",
+    jobTimezone: process.env.JOB_TIMEZONE || "UTC",
+  },
 
   // Performance module database (performance-specific tables only)
   db: {
@@ -56,6 +95,15 @@ export const config = {
   // Public base URL of the client app (used to build password-reset links).
   appUrl: process.env.APP_URL || process.env.CORS_ORIGIN?.split(",")[0] || "http://localhost:5177",
 
+  security: {
+    internalServiceSecret: process.env.INTERNAL_SERVICE_SECRET || "",
+    docsEnabled: booleanValue(process.env.API_DOCS_ENABLED, environment !== "production"),
+    diagnosticsEnabled: booleanValue(
+      process.env.DETAILED_HEALTH_ENABLED,
+      environment !== "production",
+    ),
+  },
+
   // Email (review reminders, PIP notifications)
   email: {
     host: process.env.SMTP_HOST || "localhost",
@@ -84,3 +132,5 @@ export const config = {
     origin: process.env.CORS_ORIGIN || "http://localhost:5177",
   },
 } as const;
+
+export type AppConfig = typeof config;

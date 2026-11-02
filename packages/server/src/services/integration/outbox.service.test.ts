@@ -30,6 +30,7 @@ vi.mock("../notification/notification.service", () => ({
 }));
 
 import { config } from "../../config";
+import { logger } from "../../utils/logger";
 import {
   calculateRetryDelayMs,
   createWebhookSignature,
@@ -89,6 +90,8 @@ describe("integration outbox", () => {
     });
     mockDB.raw.mockResolvedValue(undefined);
     mockDB.updateMany.mockResolvedValue(1);
+    mockDB.create.mockImplementation(async (_table, data) => data);
+    mockDB.transaction.mockImplementation(async (fn) => fn(mockDB));
     mockLogDelivery.mockResolvedValue(undefined);
   });
 
@@ -204,6 +207,17 @@ describe("integration outbox", () => {
     expect(mockLogDelivery).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "webhook", status: "sent" }),
     );
+    expect(mockDB.create).toHaveBeenCalledWith(
+      "integration_outbox_attempts",
+      expect.objectContaining({
+        outbox_event_id: "event-1",
+        replay_generation: 0,
+        attempt_number: 1,
+        result: "delivered",
+        http_status: 204,
+        error: null,
+      }),
+    );
   });
 
   it("keeps a successful webhook delivered when delivery-log persistence fails", async () => {
@@ -283,6 +297,53 @@ describe("integration outbox", () => {
     expect(mockLogDelivery).toHaveBeenCalledWith(
       expect.objectContaining({ status: "failed" }),
     );
+    expect(mockDB.create).toHaveBeenCalledWith(
+      "integration_outbox_attempts",
+      expect.objectContaining({
+        attempt_number: 1,
+        result: "retry",
+        http_status: 503,
+        error: "EMP Cloud webhook returned HTTP 503",
+      }),
+    );
+  });
+
+  it("persists only a safe webhook origin and sanitized failure details", async () => {
+    Object.assign(config.empcloudWebhook as any, {
+      url: "https://user:password@empcloud.example.test/hooks/performance?access_token=url-secret",
+    });
+    available([event()]);
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          'POST https://hooks.example.test/path?token=query-secret failed with access_token="body-secret"',
+        ),
+      );
+
+    await processOutboxBatch({
+      fetchImpl: fetchImpl as any,
+      now: () => NOW,
+      random: () => 0,
+    });
+
+    expect(mockDB.updateMany).toHaveBeenLastCalledWith(
+      "integration_outbox",
+      expect.objectContaining({ id: "event-1", status: "processing" }),
+      expect.objectContaining({
+        last_error:
+          "POST [redacted-url] failed with access_token=[redacted]",
+      }),
+    );
+    expect(mockLogDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipient: "https://empcloud.example.test",
+        error: "POST [redacted-url] failed with access_token=[redacted]",
+      }),
+    );
+    expect(JSON.stringify(mockLogDelivery.mock.calls)).not.toContain("url-secret");
+    expect(JSON.stringify(mockLogDelivery.mock.calls)).not.toContain("query-secret");
+    expect(JSON.stringify(mockLogDelivery.mock.calls)).not.toContain("body-secret");
   });
 
   it("schedules retry delay from the failure time rather than request start", async () => {
@@ -311,6 +372,7 @@ describe("integration outbox", () => {
   it("moves an event to dead-letter state after its final attempt", async () => {
     available([event({ attempts: 2, max_attempts: 3 })]);
     const fetchImpl = vi.fn().mockRejectedValue(new Error("connection refused"));
+    const errorLog = vi.spyOn(logger, "error").mockImplementation(() => logger);
 
     const result = await processOutboxBatch({
       fetchImpl: fetchImpl as any,
@@ -322,8 +384,105 @@ describe("integration outbox", () => {
     expect(mockDB.updateMany).toHaveBeenLastCalledWith(
       "integration_outbox",
       expect.any(Object),
-      expect.objectContaining({ status: "dead", attempts: 3 }),
+      expect.objectContaining({
+        status: "dead",
+        attempts: 3,
+        dead_at: NOW,
+        alerted_at: NOW,
+      }),
     );
+    expect(mockDB.create).toHaveBeenCalledWith(
+      "integration_outbox_attempts",
+      expect.objectContaining({
+        replay_generation: 0,
+        attempt_number: 3,
+        result: "dead",
+        error: "connection refused",
+      }),
+    );
+    expect(mockDB.create).toHaveBeenCalledWith(
+      "audit_logs",
+      expect.objectContaining({
+        organization_id: 7,
+        user_id: 0,
+        action: "integration_outbox.dead_alerted",
+        entity_id: "event-1",
+      }),
+    );
+    const deadAlert = mockDB.create.mock.calls.find(
+      (call) => call[0] === "audit_logs",
+    )?.[1];
+    expect(deadAlert.new_values).not.toContain("connection refused");
+    expect(errorLog).toHaveBeenCalledOnce();
+    expect(errorLog).toHaveBeenCalledWith(
+      "Integration outbox event moved to dead state",
+      expect.objectContaining({ eventId: "event-1", replayGeneration: 0 }),
+    );
+    errorLog.mockRestore();
+  });
+
+  it("records attempts in the active replay generation", async () => {
+    available([event({ replay_count: 2 })]);
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 202 });
+
+    await processOutboxBatch({
+      fetchImpl: fetchImpl as any,
+      now: () => NOW,
+      random: () => 0,
+    });
+
+    expect(mockDB.create).toHaveBeenCalledWith(
+      "integration_outbox_attempts",
+      expect.objectContaining({
+        replay_generation: 2,
+        attempt_number: 1,
+        result: "delivered",
+      }),
+    );
+  });
+
+  it("redacts complete bearer credentials before persisting attempt errors", async () => {
+    available([event()]);
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValue(new Error("Authorization: Bearer very-secret-jwt failed"));
+
+    await processOutboxBatch({
+      fetchImpl: fetchImpl as any,
+      now: () => NOW,
+      random: () => 0,
+    });
+
+    expect(mockDB.create).toHaveBeenCalledWith(
+      "integration_outbox_attempts",
+      expect.objectContaining({
+        result: "retry",
+        error: "authorization=[redacted] failed",
+      }),
+    );
+  });
+
+  it("does not emit another dead alert after alerted_at is set", async () => {
+    available([
+      event({ attempts: 2, max_attempts: 3, alerted_at: NOW }),
+    ]);
+    const fetchImpl = vi.fn().mockRejectedValue(new Error("connection refused"));
+    const errorLog = vi.spyOn(logger, "error").mockImplementation(() => logger);
+
+    await processOutboxBatch({
+      fetchImpl: fetchImpl as any,
+      now: () => NOW,
+      random: () => 0,
+    });
+
+    expect(errorLog).not.toHaveBeenCalledWith(
+      "Integration outbox event moved to dead state",
+      expect.anything(),
+    );
+    expect(
+      mockDB.create.mock.calls.some((call) => call[0] === "audit_logs"),
+    ).toBe(false);
+    errorLog.mockRestore();
   });
 
   it("recovers expired processing leases before selecting available work", async () => {

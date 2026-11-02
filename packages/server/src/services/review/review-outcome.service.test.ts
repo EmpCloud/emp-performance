@@ -206,6 +206,26 @@ describe("review outcome service", () => {
         }),
       ]),
     );
+    const outcomeRecord = mockDB.createMany.mock.calls.find(
+      (call) => call[0] === "review_outcomes",
+    )?.[1][0];
+    const revisionRecord = mockDB.createMany.mock.calls.find(
+      (call) => call[0] === "review_outcome_revisions",
+    )?.[1][0];
+    expect(outcomeRecord.current_revision_id).toBeNull();
+    expect(revisionRecord).toMatchObject({
+      outcome_id: outcomeRecord.id,
+      version: 1,
+      rating: 4.25,
+      source: "release",
+      status: "applied",
+    });
+    expect(mockDB.update).toHaveBeenCalledWith(
+      "review_outcomes",
+      outcomeRecord.id,
+      { current_revision_id: revisionRecord.id },
+    );
+    expect(created[0].current_revision_id).toBe(revisionRecord.id);
     expect(created).toHaveLength(1);
   });
 

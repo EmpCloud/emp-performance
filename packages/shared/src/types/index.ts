@@ -292,6 +292,33 @@ export type ReviewOutcomeAppealStatus =
   | "not_upheld"
   | "withdrawn";
 
+export type ReviewOutcomeRevisionSource = "release" | "appeal_correction";
+export type ReviewOutcomeRevisionStatus = "pending" | "applied" | "rejected";
+
+/**
+ * Append-only rating history for a released review outcome. The original
+ * `released_rating` remains the immutable publication snapshot; corrections
+ * advance `current_revision_id` instead of overwriting it.
+ */
+export interface ReviewOutcomeRevision {
+  id: string;
+  organization_id: number;
+  outcome_id: string;
+  version: number;
+  rating: number;
+  source: ReviewOutcomeRevisionSource;
+  status: ReviewOutcomeRevisionStatus;
+  reason: string | null;
+  proposed_by: number | null;
+  proposed_at: string | null;
+  reviewed_by: number | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  supersedes_revision_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /**
  * The rating snapshot released to an employee for one review-cycle
  * participation. Acknowledgement confirms receipt only; it is independent of
@@ -304,6 +331,7 @@ export interface ReviewOutcome {
   participant_id: string;
   employee_id: number;
   released_rating: number;
+  current_revision_id: string | null;
   released_at: string;
   appeal_deadline_at: string;
   acknowledged_at: string | null;
@@ -323,6 +351,7 @@ export interface ReviewOutcome {
 }
 
 export interface ReviewOutcomeView extends ReviewOutcome {
+  effective_rating: number;
   cycle_name: string | null;
   cycle_start_date: string | null;
   cycle_end_date: string | null;

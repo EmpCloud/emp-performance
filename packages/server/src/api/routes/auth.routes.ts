@@ -4,12 +4,11 @@
 // /forgot-password, /reset-password, /change-password; GET /me, /profile
 // ============================================================================
 
-import { Router, Request, Response, NextFunction } from "express";
+import { Router, Request, Response, NextFunction, type CookieOptions } from "express";
 import {
   loginSchema,
   registerSchema,
   ssoSchema,
-  refreshTokenSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
   changePasswordSchema,
@@ -20,6 +19,117 @@ import { authenticate } from "../middleware/auth.middleware";
 import { sendEmail } from "../../services/email/email.service";
 import { config } from "../../config";
 import { logger } from "../../utils/logger";
+import { ForbiddenError, UnauthorizedError } from "../../utils/errors";
+
+export const REFRESH_COOKIE_NAME = "emp_performance_refresh";
+const REFRESH_COOKIE_PATH = "/api/v1/auth";
+
+function refreshCookieMaxAgeMs(expiry: string): number {
+  const match = /^(\d+)\s*([smhd])?$/.exec(expiry.trim());
+  if (!match) return 7 * 24 * 60 * 60 * 1_000;
+
+  const amount = Number(match[1]);
+  const multiplier = ({ s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 } as const)[
+    (match[2] || "s") as "s" | "m" | "h" | "d"
+  ];
+  return Number.isSafeInteger(amount) && amount > 0
+    ? amount * multiplier
+    : 7 * 24 * 60 * 60 * 1_000;
+}
+
+function refreshCookieOptions(): CookieOptions {
+  return {
+    httpOnly: true,
+    secure: config.env === "production",
+    sameSite: "lax",
+    path: REFRESH_COOKIE_PATH,
+  };
+}
+
+function readCookie(req: Request, name: string): string | undefined {
+  const header = req.headers.cookie;
+  if (!header) return undefined;
+
+  for (const part of header.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0 || part.slice(0, separator).trim() !== name) continue;
+    const value = part.slice(separator + 1).trim();
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function normalizeOrigin(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    return url.origin;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Protect cookie-backed session mutations from cross-origin browser calls. */
+export function assertTrustedSessionOrigin(req: Request): void {
+  const origin = req.get("origin");
+  const fetchSite = req.get("sec-fetch-site")?.toLowerCase();
+  if (!origin) {
+    if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") {
+      throw new ForbiddenError("Untrusted session request origin");
+    }
+    return;
+  }
+
+  const allowed = new Set<string>();
+  const host = req.get("host");
+  if (host) allowed.add(`${req.protocol}://${host}`);
+  for (const candidate of config.cors.origin.split(",")) {
+    if (candidate.trim() === "*") continue;
+    const normalized = normalizeOrigin(candidate.trim());
+    if (normalized) allowed.add(normalized);
+  }
+
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (!normalizedOrigin || !allowed.has(normalizedOrigin)) {
+    throw new ForbiddenError("Untrusted session request origin");
+  }
+}
+
+function trustedSessionOrigin(req: Request, _res: Response, next: NextFunction): void {
+  try {
+    assertTrustedSessionOrigin(req);
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+function setRefreshCookie(res: Response, refreshToken: string): void {
+  res.cookie(REFRESH_COOKIE_NAME, refreshToken, {
+    ...refreshCookieOptions(),
+    maxAge: refreshCookieMaxAgeMs(config.jwt.refreshExpiry),
+  });
+}
+
+function clearRefreshCookie(res: Response): void {
+  res.clearCookie(REFRESH_COOKIE_NAME, refreshCookieOptions());
+}
+
+function sendLoginSession(
+  res: Response,
+  result: Awaited<ReturnType<typeof authService.login>>,
+  status = 200,
+): void {
+  setRefreshCookie(res, result.tokens.refreshToken);
+  sendSuccess(res, {
+    user: result.user,
+    tokens: { accessToken: result.tokens.accessToken },
+  }, status);
+}
 
 function passwordResetEmailHtml(resetUrl: string): string {
   return `<!DOCTYPE html>
@@ -43,54 +153,57 @@ function sessionContext(req: Request) {
 }
 
 // POST /auth/login
-router.post("/login", async (req: Request, res: Response, next: NextFunction) => {
+router.post("/login", trustedSessionOrigin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { email, password } = loginSchema.parse(req.body);
     const result = await authService.login(email, password, sessionContext(req));
-    sendSuccess(res, result);
+    sendLoginSession(res, result);
   } catch (err) {
     next(err);
   }
 });
 
 // POST /auth/register
-router.post("/register", async (req: Request, res: Response, next: NextFunction) => {
+router.post("/register", trustedSessionOrigin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = registerSchema.parse(req.body);
     const result = await authService.register(data, sessionContext(req));
-    sendSuccess(res, result, 201);
+    sendLoginSession(res, result, 201);
   } catch (err) {
     next(err);
   }
 });
 
 // POST /auth/sso
-router.post("/sso", async (req: Request, res: Response, next: NextFunction) => {
+router.post("/sso", trustedSessionOrigin, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { token } = ssoSchema.parse(req.body);
     const result = await authService.ssoLogin(token, sessionContext(req));
-    sendSuccess(res, result);
+    sendLoginSession(res, result);
   } catch (err) {
     next(err);
   }
 });
 
 // POST /auth/refresh-token
-router.post("/refresh-token", async (req: Request, res: Response, next: NextFunction) => {
+router.post("/refresh-token", trustedSessionOrigin, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { refreshToken } = refreshTokenSchema.parse(req.body);
+    const refreshToken = readCookie(req, REFRESH_COOKIE_NAME);
+    if (!refreshToken) throw new UnauthorizedError("Refresh session is missing or expired");
     const result = await authService.refreshToken(refreshToken, sessionContext(req));
-    sendSuccess(res, result);
+    setRefreshCookie(res, result.refreshToken);
+    sendSuccess(res, { accessToken: result.accessToken });
   } catch (err) {
     next(err);
   }
 });
 
-// POST /auth/logout — revoke the supplied refresh token's session
-router.post("/logout", authenticate, async (req: Request, res: Response, next: NextFunction) => {
+// POST /auth/logout — revoke and clear the cookie-backed refresh session.
+router.post("/logout", trustedSessionOrigin, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { refreshToken } = req.body ?? {};
-    await authService.logout(refreshToken, req.user!.empcloudUserId);
+    const refreshToken = readCookie(req, REFRESH_COOKIE_NAME) || "";
+    await authService.logout(refreshToken);
+    clearRefreshCookie(res);
     sendSuccess(res, { message: "Logged out" });
   } catch (err) {
     next(err);

@@ -16,6 +16,35 @@ router.use(authenticate);
 
 const HR_ROLES = ["hr_admin", "hr_manager", "org_admin", "super_admin"] as const;
 
+/**
+ * Shared by the canonical analytics route and its compatibility alias. Keeping
+ * authorization in this handler prevents aliases from weakening self-or-HR.
+ */
+export async function skillsGapHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const orgId = req.user!.empcloudOrgId;
+    const employeeId = Number(req.params.employeeId);
+    if (!Number.isSafeInteger(employeeId) || employeeId <= 0) {
+      throw new ValidationError("employeeId must be a positive integer");
+    }
+
+    const isHr = (HR_ROLES as readonly string[]).includes(req.user!.role);
+    if (!isHr && req.user!.empcloudUserId !== employeeId) {
+      throw new ForbiddenError("You may only view your own skills gap");
+    }
+
+    const result = await analyticsService.getSkillsGap(orgId, employeeId);
+    const recommendations = analyticsService.getLearningRecommendations(result.competencies);
+    sendSuccess(res, { ...result, recommendations });
+  } catch (err) {
+    next(err);
+  }
+}
+
 // GET /analytics/overview — org-wide stats (HR only, A4)
 router.get(
   "/overview",
@@ -223,23 +252,6 @@ router.get(
 
 // GET /analytics/skills-gap/:employeeId — individual skills gap
 // A4: a user may read their own gap; otherwise HR/admin only.
-router.get("/skills-gap/:employeeId", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const orgId = req.user!.empcloudOrgId;
-    const employeeId = parseInt(req.params.employeeId as string);
-    if (isNaN(employeeId)) throw new ValidationError("employeeId must be a number");
-
-    const isHr = (HR_ROLES as readonly string[]).includes(req.user!.role);
-    if (!isHr && req.user!.empcloudUserId !== employeeId) {
-      throw new ForbiddenError("You may only view your own skills gap");
-    }
-
-    const result = await analyticsService.getSkillsGap(orgId, employeeId);
-    const recommendations = analyticsService.getLearningRecommendations(result.competencies);
-    sendSuccess(res, { ...result, recommendations });
-  } catch (err) {
-    next(err);
-  }
-});
+router.get("/skills-gap/:employeeId", skillsGapHandler);
 
 export { router as analyticsRoutes };
