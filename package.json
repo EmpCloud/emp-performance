@@ -22,6 +22,7 @@
     "test:server": "pnpm --filter @emp-performance/server test",
     "test:all": "pnpm --filter @emp-performance/server test:all",
     "test:ci": "pnpm --filter @emp-performance/server test:ci",
+    "test:dashboard": "playwright test --config playwright.dashboard.config.ts",
     "lint": "pnpm -r run lint",
     "smoke": "node scripts/smoke-check.mjs",
     "db:migrate": "pnpm --filter @emp-performance/server db:migrate",

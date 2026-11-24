@@ -93,6 +93,12 @@ jobs:
       - name: Run tests
         run: pnpm test:ci
 
+      - name: Install browser for dashboard regressions
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Test dashboard
+        run: pnpm test:dashboard
+
       - name: Verify local readiness
         shell: bash
         run: |
