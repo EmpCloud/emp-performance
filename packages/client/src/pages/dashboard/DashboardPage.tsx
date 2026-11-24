@@ -223,6 +223,7 @@ export function DashboardPage() {
             </div>
           </div>
           <select
+            aria-label={t("dashboard.activityDateRange", { defaultValue: "Recent activity date range" })}
             value={rangeDays}
             onChange={(e) => setRangeDays(Number(e.target.value))}
             className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-700 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"

@@ -238,6 +238,9 @@
     "integrationOperations": "Integration Health",
     "logout": "Log out",
     "changeLanguage": "Change language",
+    "openNavigation": "Open navigation",
+    "closeNavigation": "Close navigation",
+    "mainNavigation": "Main navigation",
     "myProfile": "My profile",
     "expandSidebar": "Expand sidebar",
     "collapseSidebar": "Collapse sidebar"
@@ -252,6 +255,7 @@
     "activityLoadError": "Some recent activity could not be loaded.",
     "retryOverview": "Retry metrics",
     "retryActivity": "Retry activity",
+    "activityDateRange": "Recent activity date range",
     "myPendingReviews": "My Pending Reviews",
     "reviewsLoadError": "Unable to load your pending reviews.",
     "retryReviews": "Retry reviews",

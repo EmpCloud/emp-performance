@@ -369,12 +369,13 @@ export function DashboardLayout() {
             <button
               ref={mobileTriggerRef}
               onClick={() => setMobileOpen(true)}
+              aria-label={t("nav.openNavigation", { defaultValue: "Open navigation" })}
               aria-expanded={mobileOpen}
               aria-controls="mobile-navigation"
               aria-haspopup="dialog"
               className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 lg:hidden"
             >
-              <Menu className="h-5 w-5" />
+              <Menu aria-hidden="true" className="h-5 w-5" />
             </button>
           </div>
           <div className="flex items-center gap-3">
