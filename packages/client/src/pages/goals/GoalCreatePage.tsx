@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Save } from "lucide-react";
 import { apiGet, apiPost } from "@/api/client";
+import { invalidateGoalQueries } from "@/api/goal-cache";
 import { useAuthStore } from "@/lib/auth-store";
 import toast from "react-hot-toast";
 
@@ -26,6 +27,7 @@ interface ParentGoalOption {
 
 export function GoalCreatePage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
 
   const [title, setTitle] = useState("");
@@ -72,7 +74,8 @@ export function GoalCreatePage() {
 
   const mutation = useMutation({
     mutationFn: (body: any) => apiPost("/goals", body),
-    onSuccess: (res: any) => {
+    onSuccess: async (res: any) => {
+      await invalidateGoalQueries(queryClient);
       toast.success("Goal created");
       const id = res?.data?.id;
       navigate(id ? `/goals/${id}` : "/goals");

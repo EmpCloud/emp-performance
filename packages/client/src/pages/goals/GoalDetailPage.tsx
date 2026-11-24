@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { apiGet, apiPost, apiPut, apiDelete } from "@/api/client";
+import { invalidateGoalQueries } from "@/api/goal-cache";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Pagination } from "@/components/Pagination";
@@ -169,8 +170,8 @@ export function GoalDetailPage() {
 
   const addKRMutation = useMutation({
     mutationFn: (body: any) => apiPost(`/goals/${id}/key-results`, body),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["goal-detail", id] });
+    onSuccess: async () => {
+      await invalidateGoalQueries(queryClient);
       setShowAddKR(false);
       setKrTitle("");
       setKrTarget("");
@@ -182,8 +183,8 @@ export function GoalDetailPage() {
   const editKRMutation = useMutation({
     mutationFn: ({ krId, body }: { krId: string; body: any }) =>
       apiPut(`/goals/${id}/key-results/${krId}`, body),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["goal-detail", id] });
+    onSuccess: async () => {
+      await invalidateGoalQueries(queryClient);
       setEditingKrId(null);
     },
     onError: (err: any) =>
@@ -192,15 +193,15 @@ export function GoalDetailPage() {
 
   const deleteKRMutation = useMutation({
     mutationFn: (krId: string) => apiDelete(`/goals/${id}/key-results/${krId}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["goal-detail", id] }),
+    onSuccess: () => invalidateGoalQueries(queryClient),
     onError: (err: any) =>
       toast.error(err.response?.data?.error?.message || "Failed to delete key result"),
   });
 
   const checkInMutation = useMutation({
     mutationFn: (body: any) => apiPost(`/goals/${id}/check-in`, body),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["goal-detail", id] });
+    onSuccess: async () => {
+      await invalidateGoalQueries(queryClient);
       setShowCheckIn(false);
       setCiProgress("");
       setCiNotes("");
@@ -213,8 +214,8 @@ export function GoalDetailPage() {
 
   const editGoalMutation = useMutation({
     mutationFn: (body: any) => apiPut(`/goals/${id}`, body),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["goal-detail", id] });
+    onSuccess: async () => {
+      await invalidateGoalQueries(queryClient);
       setShowEditGoal(false);
       toast.success("Goal updated");
     },
@@ -224,7 +225,7 @@ export function GoalDetailPage() {
 
   const updateStatusMutation = useMutation({
     mutationFn: (status: string) => apiPut(`/goals/${id}`, { status }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["goal-detail", id] }),
+    onSuccess: () => invalidateGoalQueries(queryClient),
     onError: (err: any) =>
       toast.error(err.response?.data?.error?.message || "Failed to update status"),
   });

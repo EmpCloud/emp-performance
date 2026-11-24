@@ -11,6 +11,7 @@ import {
   Target,
 } from "lucide-react";
 import { apiGet, apiPost } from "@/api/client";
+import { invalidateGoalQueries } from "@/api/goal-cache";
 import { StatusBadge } from "@/components/StatusBadge";
 import { cn, formatDate } from "@/lib/utils";
 import { useAuthStore } from "@/lib/auth-store";
@@ -121,8 +122,8 @@ export function MyGoalDetailPage() {
 
   const checkInMutation = useMutation({
     mutationFn: (body: any) => apiPost(`/goals/${id}/check-in`, body),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["goal-detail", id] });
+    onSuccess: async () => {
+      await invalidateGoalQueries(queryClient);
       setShowCheckIn(false);
       setCheckInProgress("");
       setCheckInNotes("");
