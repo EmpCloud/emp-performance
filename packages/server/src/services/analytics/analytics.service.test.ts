@@ -79,3 +79,32 @@ describe("overview goal completion", () => {
     },
   );
 });
+
+describe("personal pending reviews", () => {
+  it("counts assigned pending and draft reviews without submitted or other users' reviews", async () => {
+    rows.reviews = [
+      { organization_id: 7, reviewer_id: 101, status: "pending" },
+      { organization_id: 7, reviewer_id: 101, status: "draft" },
+      { organization_id: 7, reviewer_id: 101, status: "submitted" },
+      { organization_id: 7, reviewer_id: 102, status: "pending" },
+      { organization_id: 7, reviewer_id: 102, status: "draft" },
+      { organization_id: 7, reviewer_id: 103, status: "pending" },
+      { organization_id: 8, reviewer_id: 101, status: "pending" },
+      { organization_id: 8, reviewer_id: 101, status: "draft" },
+    ];
+
+    expect((await getMyOverview(7, 101)).pendingReviews).toBe(2);
+    // The administrative analytics page retains its organization-wide metric.
+    expect((await getOverview(7)).pendingReviews).toBe(3);
+  });
+
+  it("returns zero when only submitted reviews belong to the current reviewer", async () => {
+    rows.reviews = [
+      { organization_id: 7, reviewer_id: 101, status: "submitted" },
+      { organization_id: 7, reviewer_id: 102, status: "pending" },
+      { organization_id: 8, reviewer_id: 101, status: "draft" },
+    ];
+
+    expect((await getMyOverview(7, 101)).pendingReviews).toBe(0);
+  });
+});

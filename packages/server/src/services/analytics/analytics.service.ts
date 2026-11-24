@@ -93,7 +93,7 @@ export async function getOverview(orgId: number) {
 export async function getMyOverview(orgId: number, userId: number) {
   const db = getDB();
 
-  const [pendingReviews, allGoals, completedGoals, feedbackCount, cancelledGoals] = await Promise.all([
+  const [pendingReviews, allGoals, completedGoals, feedbackCount, cancelledGoals, draftReviews] = await Promise.all([
     db.count("reviews", {
       organization_id: orgId,
       reviewer_id: userId,
@@ -111,13 +111,19 @@ export async function getMyOverview(orgId: number, userId: number) {
       employee_id: userId,
       status: "cancelled",
     }),
+    db.count("reviews", {
+      organization_id: orgId,
+      reviewer_id: userId,
+      status: "draft",
+    }),
   ]);
 
   const totalGoals = Math.max(0, allGoals - cancelledGoals);
   const goalCompletionRate = totalGoals > 0 ? Math.round((completedGoals / totalGoals) * 100) : 0;
 
   return {
-    pendingReviews,
+    // My Reviews treats both unstarted and drafted reviews as outstanding.
+    pendingReviews: pendingReviews + draftReviews,
     goalCompletionRate,
     feedbackCount,
     totalGoals,

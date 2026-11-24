@@ -33,7 +33,7 @@ interface OverviewData {
 // #1: link each stat card to its detail page so users can drill in.
 const STAT_CARDS = [
   { key: "activeCycles", labelKey: "dashboard.activeCycles", icon: RefreshCw, color: "bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400", href: "/review-cycles" },
-  { key: "pendingReviews", labelKey: "dashboard.pendingReviews", icon: ClipboardCheck, color: "bg-amber-50 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400", href: "/reviews/my" },
+  { key: "pendingReviews", labelKey: "dashboard.myPendingReviews", icon: ClipboardCheck, color: "bg-amber-50 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400", href: "/reviews/my" },
   { key: "goalCompletionRate", labelKey: "dashboard.goalCompletion", icon: Target, color: "bg-green-50 text-green-600 dark:bg-green-500/15 dark:text-green-400", suffix: "%", href: "/goals" },
   { key: "pipCount", labelKey: "dashboard.activePips", icon: AlertTriangle, color: "bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-400", href: "/pips" },
   { key: "feedbackCount", labelKey: "dashboard.totalFeedback", icon: MessageSquare, color: "bg-purple-50 text-purple-600 dark:bg-purple-500/15 dark:text-purple-400", href: "/feedback" },
@@ -131,6 +131,15 @@ export function DashboardPage() {
 
   const overview = overviewQuery.data?.data;
   const overviewFailed = overviewQuery.isError || (!overviewQuery.isPending && !overview);
+
+  // This card opens the signed-in user's review workspace, even for admins.
+  const personalOverviewQuery = useQuery({
+    queryKey: ["analytics", "my-overview", userId, orgId],
+    queryFn: () => apiGet<OverviewData>("/analytics/my-overview"),
+    enabled: !!user && organizationView,
+  });
+  const reviewsQuery = organizationView ? personalOverviewQuery : overviewQuery;
+  const reviewsFailed = reviewsQuery.isError || (!reviewsQuery.isPending && !reviewsQuery.data?.data);
 
   // Real activity feed: recent notifications + recently updated goals, merged
   // and filtered by the selected date range (PL8 — replaces hardcoded data).
@@ -246,7 +255,25 @@ export function DashboardPage() {
       <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${organizationView ? "lg:grid-cols-5" : "lg:grid-cols-3"}`}>
         {statCards.map((card) => {
           const Icon = card.icon;
-          const value = overview?.[card.key];
+          const isReviews = card.key === "pendingReviews";
+          const value = isReviews ? reviewsQuery.data?.data?.pendingReviews : overview?.[card.key];
+          if (isReviews && reviewsFailed) {
+            return (
+              <div key={card.key} role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4">
+                <p className="text-sm text-red-700">
+                  {t("dashboard.reviewsLoadError", { defaultValue: "Unable to load your pending reviews." })}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => { void reviewsQuery.refetch(); }}
+                  disabled={reviewsQuery.isFetching}
+                  className="mt-2 rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:opacity-50"
+                >
+                  {t("dashboard.retryReviews", { defaultValue: "Retry reviews" })}
+                </button>
+              </div>
+            );
+          }
           return (
             <Link
               key={card.key}
@@ -258,7 +285,7 @@ export function DashboardPage() {
                   <Icon className="h-5 w-5" />
                 </div>
                 <div className="min-w-0">
-                  {overviewQuery.isLoading ? (
+                  {(isReviews ? reviewsQuery.isLoading : overviewQuery.isLoading) ? (
                     <Loader2 role="status" aria-label={t("common.loading")} className="h-6 w-6 animate-spin text-gray-300" />
                   ) : (
                     <p className="text-2xl font-bold tracking-tight text-gray-900">
@@ -268,7 +295,9 @@ export function DashboardPage() {
                   )}
                   <p className="truncate text-sm text-gray-500">{card.labelKey === "dashboard.feedbackReceived"
                     ? t(card.labelKey, { defaultValue: "Feedback Received" })
-                    : t(card.labelKey)}</p>
+                    : card.labelKey === "dashboard.myPendingReviews"
+                      ? t(card.labelKey, { defaultValue: "My Pending Reviews" })
+                      : t(card.labelKey)}</p>
                 </div>
               </div>
             </Link>

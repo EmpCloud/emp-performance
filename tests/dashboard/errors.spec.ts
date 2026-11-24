@@ -22,17 +22,20 @@ for (const role of ["employee", "manager"]) {
   });
 }
 
-test("failed metrics show a recoverable error, never fabricated zero totals", async ({ page }) => {
-  const api = await mockDashboard(page);
-  api.failOverview = true;
+for (const role of ["hr_admin", "employee"]) {
+test(`${role} failed metrics show a recoverable error, never fabricated zero totals`, async ({ page }) => {
+  const api = await mockDashboard(page, role);
+  const failure = role === "hr_admin" ? "failOverview" : "failPersonalOverview";
+  api[failure] = true;
   await page.goto("/dashboard");
   await expect(page.getByRole("alert").first()).toBeVisible();
   await expect(page.getByRole("main")).not.toContainText("0 / 0 goals");
-  api.failOverview = false;
+  api[failure] = false;
   await page.getByRole("button", { name: /retry/i }).first().click();
-  await expect(page.locator('main a[href="/goals"]').first()).toContainText("100%");
+  await expect(page.getByRole("link", { name: "100% Goal Completion", exact: true })).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
+}
 
 for (const dependency of ["failGoals", "failNotifications"] as const) {
   test(`${dependency} reports incomplete activity and supports retry`, async ({ page }) => {

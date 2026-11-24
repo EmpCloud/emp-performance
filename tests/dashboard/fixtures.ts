@@ -18,6 +18,7 @@ export async function mockDashboard(page: Page, role = "hr_admin") {
     personal: { pendingReviews: 2, goalCompletionRate: 100, feedbackCount: 1, totalGoals: 1, completedGoals: 1 },
     goals: [{ id: "11111111-1111-4111-8111-111111111111", title: "Completed goal", status: "completed", progress: 100, employee_id: 7, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }],
     failOverview: false,
+    failPersonalOverview: false,
     failGoals: false,
     failNotifications: false,
     requests: [] as { method: string; path: string; params: Record<string, string> }[],
@@ -30,7 +31,7 @@ export async function mockDashboard(page: Page, role = "hr_admin") {
     const ok = (data: unknown) => route.fulfill({ json: { success: true, data } });
     const unavailable = () => route.fulfill({ status: 503, json: { success: false, error: { code: "UNAVAILABLE", message: "Test service unavailable" } } });
     if (endpoint === "/analytics/overview") return state.failOverview ? unavailable() : ok(state.overview);
-    if (endpoint === "/analytics/my-overview") return state.failOverview ? unavailable() : ok(state.personal);
+    if (endpoint === "/analytics/my-overview") return state.failPersonalOverview ? unavailable() : ok(state.personal);
     if (endpoint === "/notifications/unread-count") return ok({ count: 0 });
     if (endpoint === "/notifications/feed") return state.failNotifications ? unavailable() : ok(paginate([]));
     if (endpoint === "/goals" && route.request().method() === "GET") return state.failGoals ? unavailable() : ok(paginate(state.goals));
