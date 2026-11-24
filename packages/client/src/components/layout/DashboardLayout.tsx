@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, type KeyboardEvent } from "react";
 import { Outlet, Navigate, NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -127,13 +127,68 @@ export function DashboardLayout() {
   const location = useLocation();
   const logout = useAuthStore((s) => s.logout);
   const { t } = useTranslation();
+  const mobileDialogRef = useRef<HTMLDialogElement>(null);
+  const mobileTriggerRef = useRef<HTMLButtonElement>(null);
+  const authenticated = isLoggedIn();
 
-  if (!isLoggedIn()) return <Navigate to="/login" replace />;
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks
   useEffect(() => {
     setMobileOpen(false);
-  }, [location.pathname]);
+  }, [location.key]);
+
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const closeOnDesktop = () => {
+      if (desktop.matches) setMobileOpen(false);
+    };
+    desktop.addEventListener("change", closeOnDesktop);
+    return () => desktop.removeEventListener("change", closeOnDesktop);
+  }, []);
+
+  useEffect(() => {
+    const dialog = mobileDialogRef.current;
+    if (!mobileOpen || !authenticated || !dialog) return;
+    if (window.matchMedia("(min-width: 1024px)").matches) {
+      setMobileOpen(false);
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    // A modal dialog makes the rest of the document inert while it is open.
+    dialog.showModal();
+    dialog.querySelector<HTMLButtonElement>("button")?.focus();
+
+    return () => {
+      dialog.close();
+      document.body.style.overflow = previousOverflow;
+      const trigger = mobileTriggerRef.current;
+      if (trigger?.isConnected && trigger.getClientRects().length > 0) {
+        trigger.focus({ preventScroll: true });
+      }
+    };
+  }, [mobileOpen, authenticated]);
+
+  function trapMobileFocus(event: KeyboardEvent<HTMLDialogElement>) {
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter((element) => element.tabIndex >= 0 && element.getClientRects().length > 0);
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (!first || !last) {
+      event.preventDefault();
+      return;
+    }
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  if (!authenticated) return <Navigate to="/login" replace />;
 
   function toggleCollapsed() {
     setCollapsed((c) => {
@@ -147,7 +202,9 @@ export function DashboardLayout() {
   const displayName = user ? `${user.firstName} ${user.lastName}` : "User";
   const roleLabel = t(`roles.${user?.role ?? "employee"}`, { defaultValue: t("roles.employee") });
 
-  function SidebarContent({ collapsed = false }: { collapsed?: boolean }) {
+  // Render a stable element tree: defining a component here would remount it
+  // on layout updates and discard keyboard focus inside the mobile dialog.
+  function renderSidebarContent({ collapsed = false, mobile = false }: { collapsed?: boolean; mobile?: boolean } = {}) {
     return (
       <div
         className={cn(
@@ -168,11 +225,21 @@ export function DashboardLayout() {
           {!collapsed && (
             <span className="text-lg font-bold text-gray-900 truncate">{t("brand")}</span>
           )}
+          {mobile && (
+            <button
+              type="button"
+              onClick={() => setMobileOpen(false)}
+              aria-label={t("nav.closeNavigation", { defaultValue: "Close navigation" })}
+              className="ml-auto shrink-0 rounded-lg p-2 text-gray-500 hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+            >
+              <X className="h-5 w-5" aria-hidden="true" />
+            </button>
+          )}
         </div>
 
         {/* Nav — grouped into sections; headers collapse to dividers on the
             icon-only rail */}
-        <nav className={cn("flex-1 overflow-y-auto py-4", collapsed ? "px-2" : "px-3")}>
+        <nav className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain py-4", collapsed ? "px-2" : "px-3")}>
           {NAV_SECTIONS.map((section, si) => {
             const isAdmin = ADMIN_ROLES.includes(user?.role || "employee");
             const visibleItems = section.items.filter(
@@ -255,7 +322,7 @@ export function DashboardLayout() {
     <div className="flex h-screen bg-gray-50">
       {/* Desktop sidebar */}
       <div className="relative hidden lg:block">
-        <SidebarContent collapsed={collapsed} />
+        {renderSidebarContent({ collapsed })}
         {/* Collapse / expand toggle, centred on the sidebar edge (EmpCloud style) */}
         <button
           onClick={toggleCollapsed}
@@ -271,15 +338,28 @@ export function DashboardLayout() {
         </button>
       </div>
 
-      {/* Mobile sidebar overlay (always full width) */}
-      {mobileOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setMobileOpen(false)} />
-          <div className="fixed left-0 top-0 z-50 h-full">
-            <SidebarContent />
-          </div>
-        </div>
-      )}
+      {/* Native modal behavior makes background controls inert. */}
+      <dialog
+        ref={mobileDialogRef}
+        id="mobile-navigation"
+        aria-label={t("nav.mainNavigation", { defaultValue: "Main navigation" })}
+        aria-modal="true"
+        onCancel={(event) => {
+          event.preventDefault();
+          setMobileOpen(false);
+        }}
+        onClose={() => setMobileOpen(false)}
+        onKeyDown={trapMobileFocus}
+        onClick={(event) => {
+          const bounds = event.currentTarget.getBoundingClientRect();
+          if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+            setMobileOpen(false);
+          }
+        }}
+        className="fixed inset-y-0 left-0 right-auto m-0 h-dvh max-h-none w-64 max-w-[calc(100vw-2rem)] overflow-hidden border-0 bg-white p-0 text-inherit backdrop:bg-black/50 lg:hidden"
+      >
+        {renderSidebarContent({ mobile: true })}
+      </dialog>
 
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Top bar */}
@@ -287,7 +367,11 @@ export function DashboardLayout() {
           <div className="flex items-center gap-3">
             <BackToDashboard />
             <button
+              ref={mobileTriggerRef}
               onClick={() => setMobileOpen(true)}
+              aria-expanded={mobileOpen}
+              aria-controls="mobile-navigation"
+              aria-haspopup="dialog"
               className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 lg:hidden"
             >
               <Menu className="h-5 w-5" />
