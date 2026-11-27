@@ -16,6 +16,8 @@ uploads/
 .ssh/
 deploy-keys/
 coverage/
+playwright-report/
+test-results/
 .turbo/
 
 # Claude Code local settings

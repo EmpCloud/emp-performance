@@ -1,0 +1,30 @@
+name: Dashboard follow-up tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  browser-and-client:
+    name: Client and dashboard follow-up regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @emp-performance/shared build
+      - run: pnpm test:client
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:followup

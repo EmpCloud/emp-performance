@@ -30,15 +30,27 @@ export function NotificationBell() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Unread count — polled so the badge stays fresh.
-  const { data: unreadData } = useQuery({
+  const {
+    data: unreadData,
+    isError: unreadError,
+    isFetching: unreadFetching,
+    refetch: refetchUnread,
+  } = useQuery({
     queryKey: ["notifications", "unread-count"],
     queryFn: () => apiGet<{ count: number }>("/notifications/unread-count"),
     refetchInterval: 60_000,
   });
-  const unread = unreadData?.data?.count ?? 0;
+  const unread = unreadError ? undefined : unreadData?.data?.count;
+  const bellLabel = unreadError ? "Notifications (unread count unavailable)" : "Notifications";
 
   // Most recent notifications, fetched only while the dropdown is open.
-  const { data: feedData, isLoading } = useQuery({
+  const {
+    data: feedData,
+    isLoading,
+    isError: feedError,
+    isFetching: feedFetching,
+    refetch: refetchFeed,
+  } = useQuery({
     queryKey: ["notifications", "feed", "preview"],
     queryFn: () => apiGet<PaginatedNotifications>("/notifications/feed", { page: 1, perPage: 8 }),
     enabled: open,
@@ -82,11 +94,15 @@ export function NotificationBell() {
       <button
         onClick={() => setOpen((o) => !o)}
         className="relative rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-        title="Notifications"
-        aria-label="Notifications"
+        title={bellLabel}
+        aria-label={bellLabel}
       >
         <Bell className="h-5 w-5" />
-        {unread > 0 && (
+        {unreadError ? (
+          <span aria-hidden="true" className="absolute -right-0.5 -top-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-white">
+            ?
+          </span>
+        ) : unread !== undefined && unread > 0 && (
           <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold text-white">
             {unread > 99 ? "99+" : unread}
           </span>
@@ -97,7 +113,7 @@ export function NotificationBell() {
         <div className="absolute right-0 z-50 mt-2 w-80 rounded-xl border border-gray-200 bg-white shadow-lg">
           <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
             <span className="text-sm font-semibold text-gray-900">Notifications</span>
-            {unread > 0 && (
+            {unread !== undefined && unread > 0 && (
               <button
                 onClick={() => markAll.mutate()}
                 className="flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700"
@@ -108,10 +124,36 @@ export function NotificationBell() {
             )}
           </div>
 
+          {unreadError && (
+            <div role="alert" className="border-b border-gray-100 px-4 py-3 text-sm text-red-600">
+              <p>Unread count unavailable.</p>
+              <button
+                type="button"
+                onClick={() => { void refetchUnread(); }}
+                disabled={unreadFetching}
+                className="mt-2 font-medium text-brand-600 hover:underline disabled:opacity-50"
+              >
+                Retry unread count
+              </button>
+            </div>
+          )}
+
           <div className="max-h-96 overflow-y-auto">
             {isLoading ? (
               <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-5 w-5 animate-spin text-gray-300" />
+                <Loader2 role="status" aria-label="Loading notifications" className="h-5 w-5 animate-spin text-gray-300" />
+              </div>
+            ) : feedError ? (
+              <div role="alert" className="px-4 py-6 text-center text-sm text-red-600">
+                <p>Unable to load notifications.</p>
+                <button
+                  type="button"
+                  onClick={() => { void refetchFeed(); }}
+                  disabled={feedFetching}
+                  className="mt-2 font-medium text-brand-600 hover:underline disabled:opacity-50"
+                >
+                  Retry notifications
+                </button>
               </div>
             ) : items.length === 0 ? (
               <p className="px-4 py-8 text-center text-sm text-gray-400">No notifications yet</p>
