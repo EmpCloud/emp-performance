@@ -55,6 +55,8 @@ export function NotificationBell() {
     queryKey: ["notifications", "feed", "preview"],
     queryFn: () => apiGet<PaginatedNotifications>("/notifications/feed", { page: 1, perPage: 8 }),
     enabled: open,
+    staleTime: 0,
+    refetchInterval: open ? 60_000 : false,
   });
   const items = feedData?.data?.data ?? [];
 
