@@ -17,13 +17,14 @@ import {
 } from "lucide-react";
 import { apiGet } from "@/api/client";
 import { formatDate, getInitials } from "@/lib/utils";
-import { getUser } from "@/lib/auth-store";
+import { useAuthStore } from "@/lib/auth-store";
+import type { CanonicalRole } from "@emp-performance/shared";
 
 interface OverviewData {
-  activeCycles: number;
+  activeCycles?: number;
   pendingReviews: number;
   goalCompletionRate: number;
-  pipCount: number;
+  pipCount?: number;
   feedbackCount: number;
   totalGoals: number;
   completedGoals: number;
@@ -32,11 +33,22 @@ interface OverviewData {
 // #1: link each stat card to its detail page so users can drill in.
 const STAT_CARDS = [
   { key: "activeCycles", labelKey: "dashboard.activeCycles", icon: RefreshCw, color: "bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400", href: "/review-cycles" },
-  { key: "pendingReviews", labelKey: "dashboard.pendingReviews", icon: ClipboardCheck, color: "bg-amber-50 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400", href: "/reviews/my" },
+  { key: "pendingReviews", labelKey: "dashboard.myPendingReviews", icon: ClipboardCheck, color: "bg-amber-50 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400", href: "/reviews/my" },
   { key: "goalCompletionRate", labelKey: "dashboard.goalCompletion", icon: Target, color: "bg-green-50 text-green-600 dark:bg-green-500/15 dark:text-green-400", suffix: "%", href: "/goals" },
   { key: "pipCount", labelKey: "dashboard.activePips", icon: AlertTriangle, color: "bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-400", href: "/pips" },
   { key: "feedbackCount", labelKey: "dashboard.totalFeedback", icon: MessageSquare, color: "bg-purple-50 text-purple-600 dark:bg-purple-500/15 dark:text-purple-400", href: "/feedback" },
 ] as const;
+
+const PERSONAL_STAT_CARDS = [
+  { ...STAT_CARDS[1], href: "/my/reviews" },
+  { ...STAT_CARDS[2], href: "/my/goals" },
+  { ...STAT_CARDS[4], labelKey: "dashboard.feedbackReceived", href: "/my/feedback" },
+] as const;
+
+// Keep the organization view aligned with the analytics endpoint's roles.
+const ORGANIZATION_OVERVIEW_ROLES = new Set<CanonicalRole>([
+  "super_admin", "org_admin", "hr_admin", "hr_manager", "service",
+]);
 
 // Quick actions — the everyday self-service tasks, visible to every role.
 const QUICK_ACTIONS = [
@@ -101,28 +113,58 @@ type ActivityEntry = {
 export function DashboardPage() {
   const { t, i18n } = useTranslation();
   const [rangeDays, setRangeDays] = useState<number>(30);
-  const user = getUser();
+  const user = useAuthStore((state) => state.user);
+  const userId = user?.empcloudUserId;
+  const orgId = user?.empcloudOrgId;
+  const organizationView = !!user && ORGANIZATION_OVERVIEW_ROLES.has(user.role);
+  const statCards = organizationView ? STAT_CARDS : PERSONAL_STAT_CARDS;
   const displayName = user ? `${user.firstName} ${user.lastName}` : "User";
   const roleLabel = t(`roles.${user?.role ?? "employee"}`, { defaultValue: t("roles.employee") });
 
-  const { data, isLoading } = useQuery({
-    queryKey: ["analytics", "overview"],
-    queryFn: () => apiGet<OverviewData>("/analytics/overview"),
+  const overviewQuery = useQuery({
+    queryKey: organizationView
+      ? ["analytics", "overview", orgId, userId]
+      : ["analytics", "my-overview", userId, orgId],
+    queryFn: () => apiGet<OverviewData>(organizationView ? "/analytics/overview" : "/analytics/my-overview"),
+    enabled: !!user,
   });
 
-  const overview = data?.data;
+  const overview = overviewQuery.data?.data;
+  const overviewFailed = overviewQuery.isError || (!overviewQuery.isPending && !overview);
+
+  // This card opens the signed-in user's review workspace, even for admins.
+  const personalOverviewQuery = useQuery({
+    queryKey: ["analytics", "my-overview", userId, orgId],
+    queryFn: () => apiGet<OverviewData>("/analytics/my-overview"),
+    enabled: !!user && organizationView,
+  });
+  const reviewsQuery = organizationView ? personalOverviewQuery : overviewQuery;
+  const reviewsFailed = reviewsQuery.isError || (!reviewsQuery.isPending && !reviewsQuery.data?.data);
 
   // Real activity feed: recent notifications + recently updated goals, merged
   // and filtered by the selected date range (PL8 — replaces hardcoded data).
-  const { data: notifData } = useQuery({
-    queryKey: ["dashboard", "activity", "notifications"],
+  const notificationsQuery = useQuery({
+    queryKey: ["dashboard", "activity", "notifications", orgId, userId],
     queryFn: () => apiGet<PaginatedResp<NotificationItem>>("/notifications/feed", { page: 1, perPage: 15 }),
+    enabled: !!user,
   });
-  const { data: goalsData } = useQuery({
-    queryKey: ["dashboard", "activity", "goals"],
+  const goalsQuery = useQuery({
+    queryKey: ["dashboard", "activity", "goals", orgId, userId, organizationView],
     queryFn: () =>
-      apiGet<PaginatedResp<RecentGoal>>("/goals", { page: 1, perPage: 15, sort: "updated_at", order: "desc" }),
+      apiGet<PaginatedResp<RecentGoal>>("/goals", {
+        page: 1,
+        perPage: 15,
+        sort: "updated_at",
+        order: "desc",
+        ...(!organizationView && { employeeId: userId }),
+      }),
+    enabled: !!user,
   });
+  const notifData = notificationsQuery.data;
+  const goalsData = goalsQuery.data;
+  const activityLoading = notificationsQuery.isLoading || goalsQuery.isLoading;
+  const activityFailed = notificationsQuery.isError || goalsQuery.isError;
+  const activityFetching = notificationsQuery.isFetching || goalsQuery.isFetching;
 
   const since = Date.now() - rangeDays * 24 * 60 * 60 * 1000;
 
@@ -142,7 +184,7 @@ export function DashboardPage() {
     if (new Date(ts).getTime() < since) continue;
     activity.push({
       id: `g-${g.id}`,
-      to: `/goals/${g.id}`,
+      to: `${organizationView ? "/goals" : "/my/goals"}/${g.id}`,
       text: g.title,
       time: ts,
       kind: "goal",
@@ -174,11 +216,14 @@ export function DashboardPage() {
                 {t("dashboard.welcomeBack", { name: user?.firstName || t("dashboard.there") })}
               </h1>
               <p className="text-sm text-gray-500">
-                {roleLabel} · {t("dashboard.overviewSubtitle")}
+                {roleLabel} · {organizationView
+                  ? t("dashboard.overviewSubtitle")
+                  : t("dashboard.personalOverviewSubtitle", { defaultValue: "Your performance overview and key metrics." })}
               </p>
             </div>
           </div>
           <select
+            aria-label={t("dashboard.activityDateRange", { defaultValue: "Recent activity date range" })}
             value={rangeDays}
             onChange={(e) => setRangeDays(Number(e.target.value))}
             className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-700 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
@@ -193,10 +238,43 @@ export function DashboardPage() {
       </div>
 
       {/* Stat Cards — #1: clickable, each redirects to its detail page */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        {STAT_CARDS.map((card) => {
+      {overviewFailed ? (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 p-4">
+          <p className="text-sm text-red-700">
+            {t("dashboard.overviewLoadError", { defaultValue: "Unable to load performance metrics." })}
+          </p>
+          <button
+            type="button"
+            onClick={() => { void overviewQuery.refetch(); }}
+            disabled={overviewQuery.isFetching}
+            className="rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:opacity-50"
+          >
+            {t("dashboard.retryOverview", { defaultValue: "Retry metrics" })}
+          </button>
+        </div>
+      ) : (
+      <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${organizationView ? "lg:grid-cols-5" : "lg:grid-cols-3"}`}>
+        {statCards.map((card) => {
           const Icon = card.icon;
-          const value = overview ? (overview as any)[card.key] : null;
+          const isReviews = card.key === "pendingReviews";
+          const value = isReviews ? reviewsQuery.data?.data?.pendingReviews : overview?.[card.key];
+          if (isReviews && reviewsFailed) {
+            return (
+              <div key={card.key} role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4">
+                <p className="text-sm text-red-700">
+                  {t("dashboard.reviewsLoadError", { defaultValue: "Unable to load your pending reviews." })}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => { void reviewsQuery.refetch(); }}
+                  disabled={reviewsQuery.isFetching}
+                  className="mt-2 rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:opacity-50"
+                >
+                  {t("dashboard.retryReviews", { defaultValue: "Retry reviews" })}
+                </button>
+              </div>
+            );
+          }
           return (
             <Link
               key={card.key}
@@ -208,21 +286,26 @@ export function DashboardPage() {
                   <Icon className="h-5 w-5" />
                 </div>
                 <div className="min-w-0">
-                  {isLoading ? (
-                    <Loader2 className="h-6 w-6 animate-spin text-gray-300" />
+                  {(isReviews ? reviewsQuery.isLoading : overviewQuery.isLoading) ? (
+                    <Loader2 role="status" aria-label={t("common.loading")} className="h-6 w-6 animate-spin text-gray-300" />
                   ) : (
                     <p className="text-2xl font-bold tracking-tight text-gray-900">
-                      {value ?? 0}
+                      {value ?? "—"}
                       {"suffix" in card ? card.suffix : ""}
                     </p>
                   )}
-                  <p className="truncate text-sm text-gray-500">{t(card.labelKey)}</p>
+                  <p className="truncate text-sm text-gray-500">{card.labelKey === "dashboard.feedbackReceived"
+                    ? t(card.labelKey, { defaultValue: "Feedback Received" })
+                    : card.labelKey === "dashboard.myPendingReviews"
+                      ? t(card.labelKey, { defaultValue: "My Pending Reviews" })
+                      : t(card.labelKey)}</p>
                 </div>
               </div>
             </Link>
           );
         })}
       </div>
+      )}
 
       {/* ── Quick Actions ──────────────────────────────────────────────── */}
       <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
@@ -250,32 +333,44 @@ export function DashboardPage() {
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-base font-semibold text-gray-900">{t("dashboard.goalsProgress")}</h2>
-              <p className="mt-0.5 text-sm text-gray-500">{t("dashboard.goalsProgressSubtitle")}</p>
+              <p className="mt-0.5 text-sm text-gray-500">{organizationView
+                ? t("dashboard.goalsProgressSubtitle")
+                : t("dashboard.personalGoalsProgressSubtitle", { defaultValue: "Your goal completion" })}</p>
             </div>
-            <Link to="/goals" className="text-sm font-medium text-brand-600 hover:text-brand-700">
+            <Link to={organizationView ? "/goals" : "/my/goals"} className="text-sm font-medium text-brand-600 hover:text-brand-700">
               {t("dashboard.viewAll")}
             </Link>
           </div>
+          {overviewQuery.isLoading ? (
+            <div className="flex justify-center py-6">
+              <Loader2 role="status" aria-label={t("common.loading")} className="h-6 w-6 animate-spin text-gray-300" />
+            </div>
+          ) : overviewFailed ? (
+            <p className="py-6 text-sm text-red-700">
+              {t("dashboard.goalsProgressUnavailable", { defaultValue: "Goal progress is unavailable. Retry the performance metrics above." })}
+            </p>
+          ) : overview && (
           <div className="mt-4">
             <div className="flex items-end justify-between text-sm">
               <span className="text-gray-600">{t("dashboard.status.completed")}</span>
               <span className="font-semibold text-gray-900">
-                {overview?.completedGoals ?? 0}
-                <span className="font-normal text-gray-400"> / {t("dashboard.goalsCount", { count: overview?.totalGoals ?? 0 })}</span>
+                {overview.completedGoals}
+                <span className="font-normal text-gray-400"> / {t("dashboard.goalsCount", { count: overview.totalGoals })}</span>
               </span>
             </div>
             <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-gray-100">
               <div
                 className="h-full rounded-full bg-gradient-to-r from-brand-400 to-brand-600 transition-all"
-                style={{ width: `${overview?.goalCompletionRate ?? 0}%` }}
+                style={{ width: `${overview.goalCompletionRate}%` }}
               />
             </div>
             <p className="mt-1.5 text-right text-xs font-semibold text-brand-700">
-              {overview?.goalCompletionRate ?? 0}%
+              {overview.goalCompletionRate}%
             </p>
           </div>
+          )}
           {/* Status distribution of recently-updated goals */}
-          {Object.keys(statusCounts).length > 0 && (
+          {!goalsQuery.isError && Object.keys(statusCounts).length > 0 && (
             <div className="mt-3 border-t border-gray-100 pt-3">
               <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
                 {t("dashboard.recentlyUpdated")}
@@ -311,7 +406,26 @@ export function DashboardPage() {
             </Link>
           </div>
           <div className="mt-3 space-y-1">
-            {recentActivity.length === 0 ? (
+            {activityFailed && (
+              <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3">
+                <p className="text-sm text-red-700">
+                  {t("dashboard.activityLoadError", { defaultValue: "Some recent activity could not be loaded." })}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => { void Promise.all([notificationsQuery.refetch(), goalsQuery.refetch()]); }}
+                  disabled={activityFetching}
+                  className="mt-2 rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:opacity-50"
+                >
+                  {t("dashboard.retryActivity", { defaultValue: "Retry activity" })}
+                </button>
+              </div>
+            )}
+            {activityLoading ? (
+              <div className="flex justify-center py-6">
+                <Loader2 role="status" aria-label={t("common.loading")} className="h-6 w-6 animate-spin text-gray-300" />
+              </div>
+            ) : recentActivity.length === 0 && !activityFailed ? (
               <p className="px-3 py-6 text-center text-sm text-gray-400">
                 {t("dashboard.noActivity")}
               </p>

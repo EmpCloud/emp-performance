@@ -17,7 +17,7 @@ concurrency:
 jobs:
   verify:
     name: Build, migrate, and test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       NODE_ENV: test
@@ -92,6 +92,12 @@ jobs:
 
       - name: Run tests
         run: pnpm test:ci
+
+      - name: Install browser for dashboard regressions
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Test dashboard
+        run: pnpm test:dashboard
 
       - name: Verify local readiness
         shell: bash

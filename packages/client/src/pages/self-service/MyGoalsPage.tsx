@@ -10,6 +10,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { apiGet, apiPost } from "@/api/client";
+import { invalidateGoalQueries } from "@/api/goal-cache";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Pagination } from "@/components/Pagination";
 import { EmptyState } from "@/components/EmptyState";
@@ -71,8 +72,8 @@ function GoalRow({ goal }: { goal: GoalWithKRs }) {
 
   const checkInMutation = useMutation({
     mutationFn: (body: any) => apiPost(`/goals/${goal.id}/check-in`, body),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["my-goals"] });
+    onSuccess: async () => {
+      await invalidateGoalQueries(queryClient);
       setShowCheckIn(null);
       setCheckInValue("");
       setCheckInNotes("");

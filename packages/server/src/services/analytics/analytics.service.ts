@@ -61,7 +61,7 @@ export interface LearningRecommendation {
 export async function getOverview(orgId: number) {
   const db = getDB();
 
-  const [activeCycles, pendingReviews, totalGoals, completedGoals, pipCount, feedbackCount] =
+  const [activeCycles, pendingReviews, allGoals, completedGoals, pipCount, feedbackCount, cancelledGoals] =
     await Promise.all([
       db.count("review_cycles", { organization_id: orgId, status: "active" }),
       db.count("reviews", { organization_id: orgId, status: "pending" }),
@@ -69,8 +69,11 @@ export async function getOverview(orgId: number) {
       db.count("goals", { organization_id: orgId, status: "completed" }),
       db.count("performance_improvement_plans", { organization_id: orgId, status: "active" }),
       db.count("continuous_feedback", { organization_id: orgId }),
+      db.count("goals", { organization_id: orgId, status: "cancelled" }),
     ]);
 
+  // Goal deletion sets status to cancelled; match the visible goal list.
+  const totalGoals = Math.max(0, allGoals - cancelledGoals);
   const goalCompletionRate = totalGoals > 0 ? Math.round((completedGoals / totalGoals) * 100) : 0;
 
   return {
@@ -90,7 +93,7 @@ export async function getOverview(orgId: number) {
 export async function getMyOverview(orgId: number, userId: number) {
   const db = getDB();
 
-  const [pendingReviews, totalGoals, completedGoals, feedbackCount] = await Promise.all([
+  const [pendingReviews, allGoals, completedGoals, feedbackCount, cancelledGoals, draftReviews] = await Promise.all([
     db.count("reviews", {
       organization_id: orgId,
       reviewer_id: userId,
@@ -103,12 +106,24 @@ export async function getMyOverview(orgId: number, userId: number) {
       status: "completed",
     }),
     db.count("continuous_feedback", { organization_id: orgId, to_user_id: userId }),
+    db.count("goals", {
+      organization_id: orgId,
+      employee_id: userId,
+      status: "cancelled",
+    }),
+    db.count("reviews", {
+      organization_id: orgId,
+      reviewer_id: userId,
+      status: "draft",
+    }),
   ]);
 
+  const totalGoals = Math.max(0, allGoals - cancelledGoals);
   const goalCompletionRate = totalGoals > 0 ? Math.round((completedGoals / totalGoals) * 100) : 0;
 
   return {
-    pendingReviews,
+    // My Reviews treats both unstarted and drafted reviews as outstanding.
+    pendingReviews: pendingReviews + draftReviews,
     goalCompletionRate,
     feedbackCount,
     totalGoals,
