@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Bell, Check, Loader2 } from "lucide-react";
+import toast from "react-hot-toast";
 import { apiGet, apiPost, apiPatch } from "@/api/client";
 import { cn, formatDate } from "@/lib/utils";
 
@@ -59,12 +60,21 @@ export function NotificationBell() {
 
   const markRead = useMutation({
     mutationFn: (id: string) => apiPatch(`/notifications/${id}/read`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    },
+    onError: () => {
+      toast.error("Could not mark this notification as read. Please try again from Notifications.");
+    },
   });
 
   const markAll = useMutation({
     mutationFn: () => apiPost("/notifications/read-all"),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    },
+    onError: () => {
+      toast.error("Could not mark all notifications as read. Please try again.");
     },
   });
 
@@ -79,10 +89,9 @@ export function NotificationBell() {
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  async function handleItemClick(n: NotificationItem) {
+  function handleItemClick(n: NotificationItem) {
     if (!n.is_read) {
-      await markRead.mutateAsync(n.id);
-      queryClient.invalidateQueries({ queryKey: ["notifications"] });
+      markRead.mutate(n.id);
     }
     setOpen(false);
     if (n.link) navigate(n.link);
@@ -116,10 +125,11 @@ export function NotificationBell() {
             {unread !== undefined && unread > 0 && (
               <button
                 onClick={() => markAll.mutate()}
-                className="flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700"
+                disabled={markAll.isPending}
+                className="flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700 disabled:opacity-50"
               >
                 <Check className="h-3.5 w-3.5" />
-                Mark all read
+                {markAll.isPending ? "Marking as read…" : "Mark all read"}
               </button>
             )}
           </div>
