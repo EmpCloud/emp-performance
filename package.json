@@ -22,6 +22,8 @@
     "test:server": "pnpm --filter @emp-performance/server test",
     "test:all": "pnpm --filter @emp-performance/server test:all",
     "test:ci": "pnpm --filter @emp-performance/server test:ci",
+    "test:client": "pnpm --filter @emp-performance/client test",
+    "test:followup": "playwright test --config playwright.followup.config.ts",
     "lint": "pnpm -r run lint",
     "smoke": "node scripts/smoke-check.mjs",
     "db:migrate": "pnpm --filter @emp-performance/server db:migrate",
